@@ -1,0 +1,7 @@
+.env
+/.idea/
+.vscode/
+/bin/
+/tmp/
+*.log
+*.exe

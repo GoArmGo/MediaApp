@@ -1,0 +1,103 @@
+services:
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_DB: mediaapp_db
+      POSTGRES_USER: mediaapp_user
+      POSTGRES_PASSWORD: mediaapp_password
+    ports:
+      - '5433:5432'
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  minio:
+    image: minio/minio
+    restart: always
+    ports:
+      - '9000:9000' # API порт MinIO
+      - '9001:9001' # Консоль MinIO (удобно для проверки бакетов)
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_SERVER_URL: http://minio:9000
+    volumes:
+      - minio_data:/data # Сохранение данных MinIO
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    hostname: rabbitmq
+    ports:
+      - '5672:5672' # Стандартный AMQP порт для подключения клиентов
+      - '15672:15672' # Порт для веб-интерфейса управления RabbitMQ (http://localhost:15672)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', 'check_port_connectivity']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --- СЕРВИС API-СЕРВЕРА ---
+  mediaapp-server: # <--- ПЕРЕИМЕНОВАНО
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '${SERVER_PORT}:${SERVER_PORT}'
+    environment:
+      # Эти переменные будут переданы в контейнер mediaapp из твоего .env файла
+      # Docker Compose автоматически загружает .env файл в директории docker-compose.yml
+      DATABASE_URL: ${DATABASE_URL}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY_ID}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY}
+      MINIO_USE_SSL: ${MINIO_USE_SSL}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME}
+      MINIO_REGION: ${MINIO_REGION}
+      UNSPLASH_API_KEY: ${UNSPLASH_API_KEY} # ИМЕННО ТАК: берем из .env, имя "API_KEY"
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      RABBITMQ_QUEUE_NAME: ${RABBITMQ_QUEUE_NAME}
+      SERVER_PORT: ${SERVER_PORT} # Передаем порт, который слушает приложение
+    depends_on:
+      - db
+      - minio
+      - rabbitmq
+    restart: on-failure
+    command: ['./mediaapp', '-mode', 'server'] # <--- ЯВНО УКАЗЫВАЕМ РЕЖИМ "server"
+
+  # --- НОВЫЙ СЕРВИС: ВОРКЕР ---
+  mediaapp-worker: # <--- НОВЫЙ СЕРВИС
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # Воркеру также нужны эти переменные для подключения к БД, MinIO, Unsplash и RabbitMQ
+      DATABASE_URL: ${DATABASE_URL}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY_ID}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY}
+      MINIO_USE_SSL: ${MINIO_USE_SSL}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME}
+      MINIO_REGION: ${MINIO_REGION}
+      UNSPLASH_API_KEY: ${UNSPLASH_API_KEY}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      RABBITMQ_QUEUE_NAME: ${RABBITMQ_QUEUE_NAME}
+      # Порт сервера не нужен воркеру
+    depends_on:
+      - db
+      - minio
+      - rabbitmq
+    restart: on-failure
+    command: ['./mediaapp', '-mode', 'worker'] # <--- ЯВНО УКАЗЫВАЕМ РЕЖИМ "worker"
+
+volumes:
+  db_data:
+  minio_data:
