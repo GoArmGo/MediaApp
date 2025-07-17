@@ -29,8 +29,8 @@ func NewPhotoUseCase(storage PhotoStorage, fetcher PhotoFetcher, fileStorage Fil
 }
 
 // GetOrCreatePhotoByUnsplashID получает фото по его Unsplash ID.
-// Сначала ищет в локальной БД. Если не найдено, получает из Unsplash API,
-// загружает в S3 (логика будет добавлена позже), сохраняет в БД и возвращает.
+// Сначала ищет в локальной бд. Если не найдено, получает из Unsplash API,
+// загружает в S3, сохраняет в бд и возвращает
 func (uc *photoUseCase) GetOrCreatePhotoByUnsplashID(ctx context.Context, unsplashID string) (*domain.Photo, error) {
 	// 1. Попытка получить фото из собственной базы данных
 	photo, err := uc.photoStorage.GetPhotosByUnsplashIDFromDB(ctx, unsplashID)
@@ -38,12 +38,12 @@ func (uc *photoUseCase) GetOrCreatePhotoByUnsplashID(ctx context.Context, unspla
 		return nil, fmt.Errorf("usecase: ошибка при получении фото из БД по Unsplash ID: %w", err)
 	}
 	if photo != nil {
-		// Фото найдено в БД, возвращаем его
+		// Фото найдено в бд, возвращаем его
 		log.Printf("usecase: Фото с Unsplash ID %s найдено в локальной БД (ID: %s).", unsplashID, photo.ID)
 		return photo, nil
 	}
 
-	// 2. Если фото не найдено в БД, получаем его из Unsplash API
+	// 2. Если фото не найдено в бд, получаем его из Unsplash API
 	log.Printf("usecase: Фото с Unsplash ID %s не найдено в БД. Получаем из Unsplash API...", unsplashID)
 	unsplashPhoto, err := uc.photoFetcher.FetchPhotoByIDFromExternal(ctx, unsplashID)
 	if err != nil {
@@ -65,43 +65,28 @@ func (uc *photoUseCase) GetOrCreatePhotoByUnsplashID(ctx context.Context, unspla
 		return nil, fmt.Errorf("usecase: неуспешный статус при скачивании фото с Unsplash: %s", resp.Status)
 	}
 
-	// --- ИЗМЕНЕНИЕ НАЧИНАЕТСЯ ЗДЕСЬ ---
-	// Вместо чтения всего тела ответа в память и создания seekable reader,
-	// мы теперь будем передавать *непосредственно resp.Body* в функцию загрузки MinIO,
-	// которая будет использовать Multipart Upload.
-	// Удалите следующие 3 строки:
-	// fileBytes, err := io.ReadAll(resp.Body) // Считываем весь поток в []byte
-	// if err != nil {
-	//    return nil, fmt.Errorf("usecase: ошибка при чтении содержимого фото с Unsplash: %w", err)
-	// }
-	// fileReader := bytes.NewReader(fileBytes) // Создаем seekable Reader из []byte
-
 	// Используем resp.Body напрямую как io.Reader
-	fileStream := resp.Body // <-- НОВАЯ ПЕРЕМЕННАЯ, ПРЕДСТАВЛЯЮЩАЯ ПОТОК ДАННЫХ
-
-	// --- ИЗМЕНЕНИЕ ЗАКАНЧИВАЕТСЯ ЗДЕСЬ ---
+	fileStream := resp.Body
 
 	// Определяем Content-Type для S3
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
-		contentType = "application/octet-stream" // Дефолтный Content-Type, если не удалось определить
+		contentType = "application/octet-stream"
 	}
 
 	// Генерируем уникальный ключ для S3 на основе UnsplashID или нашего внутреннего ID
 	// Используем UnsplashID, так как это уникальный идентификатор фото во внешней системе,
-	// и это упрощает его связывание с файлом в S3.
+	// и это упрощает его связывание с файлом в S3
 	s3Key := fmt.Sprintf("unsplash-photos/%s", unsplashPhoto.UnsplashID) // Можно добавить расширение: ".jpg"
 
-	// --- ИЗМЕНЕНИЕ ЗДЕСЬ: ПЕРЕДАЕМ fileStream вместо fileReader ---
 	s3URL, err := uc.fileStorage.UploadFile(ctx, s3Key, fileStream, contentType)
-	// --- КОНЕЦ ИЗМЕНЕНИЯ ---
 	if err != nil {
 		return nil, fmt.Errorf("usecase: ошибка загрузки фото %s в S3: %w", unsplashPhoto.UnsplashID, err)
 	}
 	unsplashPhoto.S3URL = s3URL // Сохраняем полученный S3 URL
 
-	// 4. Сохраняем полученное и обработанное фото в собственной базе данных
-	// photo.UserID будет установлен в SavePhoto, как мы это делали.
+	// 4. Сохраняем полученное и обработанное фото в собственной бд
+	// photo.UserID будет установлен в SavePhoto
 	err = uc.photoStorage.SavePhoto(ctx, unsplashPhoto)
 	if err != nil {
 		return nil, fmt.Errorf("usecase: ошибка при сохранении фото %s в локальной БД: %w", unsplashPhoto.ID, err)
@@ -111,15 +96,14 @@ func (uc *photoUseCase) GetOrCreatePhotoByUnsplashID(ctx context.Context, unspla
 	return unsplashPhoto, nil
 }
 
-// SearchAndSavePhotos ищет фото по запросу пользователя во внешнем API, сохраняет их в БД
-// и возвращает список сохраненных фото.
+// SearchAndSavePhotos ищет фото по запросу пользователя во внешнем API, сохраняет их в бд
+// и возвращает список сохраненных фото
 func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, page, perPage int) ([]domain.Photo, error) {
 
 	// Устанавливаем значение по умолчанию, если perPage не указан или равен 0
 	if perPage <= 0 {
-		perPage = 3 // <-- ЗНАЧЕНИЕ ПО УМОЛЧАНИЮ (3 фото)
+		perPage = 3
 	}
-	// Если страница не указана (или 0), ставим 1
 	if page <= 0 {
 		page = 1
 	}
@@ -143,7 +127,7 @@ func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, p
 		existingPhoto, err := uc.photoStorage.GetPhotosByUnsplashIDFromDB(ctx, photo.UnsplashID)
 		if err != nil && err != sql.ErrNoRows {
 			log.Printf("usecase: ошибка при проверке существования фото с Unsplash ID %s в БД: %v", photo.UnsplashID, err)
-			continue // Пропускаем это фото, если ошибка не "нет строк"
+			continue // Пропускаем это фото, если нет ошибки "нет строк"
 		}
 		if existingPhoto != nil {
 			log.Printf("usecase: Фото с Unsplash ID %s уже существует в БД (ID: %s), пропускаем сохранение.", photo.UnsplashID, existingPhoto.ID)
@@ -165,19 +149,7 @@ func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, p
 			continue // Пропускаем, если статус не 200 OK
 		}
 
-		// --- ИЗМЕНЕНИЕ НАЧИНАЕТСЯ ЗДЕСЬ ---
-		// То же самое изменение, что и выше: удаляем io.ReadAll и bytes.NewReader
-		// Удалите следующие 3 строки:
-		// fileBytes, err := io.ReadAll(resp.Body) // Считываем весь поток в []byte
-		// if err != nil {
-		//    log.Printf("usecase: ошибка при чтении содержимого фото с Unsplash URL %s: %v", photo.OriginalURL, err)
-		//    continue // Пропускаем это фото, если ошибка чтения
-		// }
-		// fileReader := bytes.NewReader(fileBytes) // Создаем seekable Reader из []byte
-
-		fileStream := resp.Body // <-- НОВАЯ ПЕРЕМЕННАЯ
-
-		// --- ИЗМЕНЕНИЕ ЗАКАНЧИВАЕТСЯ ЗДЕСЬ ---
+		fileStream := resp.Body
 
 		// Определяем Content-Type для S3
 		contentType := resp.Header.Get("Content-Type")
@@ -188,9 +160,7 @@ func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, p
 		// Генерируем уникальный ключ для S3
 		s3Key := fmt.Sprintf("unsplash-photos/%s", photo.UnsplashID) // Можно добавить расширение
 
-		// --- ИЗМЕНЕНИЕ ЗДЕСЬ: ПЕРЕДАЕМ fileStream вместо fileReader ---
 		s3URL, err := uc.fileStorage.UploadFile(ctx, s3Key, fileStream, contentType)
-		// --- КОНЕЦ ИЗМЕНЕНИЯ ---
 		if err != nil {
 			log.Printf("usecase: ошибка загрузки фото %s в S3: %v", photo.UnsplashID, err)
 			continue // Пропускаем, если не удалось загрузить в S3
@@ -210,7 +180,7 @@ func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, p
 	return savedPhotos, nil
 }
 
-// GetPhotoDetailsFromDB получает детали фото из нашей БД по нашему внутреннему ID.
+// GetPhotoDetailsFromDB получает детали фото из бд по нашему внутреннему ID
 func (uc *photoUseCase) GetPhotoDetailsFromDB(ctx context.Context, id uuid.UUID) (*domain.Photo, error) {
 	photo, err := uc.photoStorage.GetPhotoByIDFromDB(ctx, id)
 	if err != nil {
@@ -223,7 +193,7 @@ func (uc *photoUseCase) GetPhotoDetailsFromDB(ctx context.Context, id uuid.UUID)
 	return photo, nil
 }
 
-// GetRecentPhotosFromDB получает последние фото из нашей БД с пагинацией.
+// GetRecentPhotosFromDB получает последние фото из бд с пагинацией
 func (uc *photoUseCase) GetRecentPhotosFromDB(ctx context.Context, page, perPage int) ([]domain.Photo, error) {
 	photos, err := uc.photoStorage.ListPhotosInDB(ctx, page, perPage) // Используем ListPhotosInDB из storage
 	if err != nil {

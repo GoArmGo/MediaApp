@@ -11,7 +11,7 @@ type UnsplashPhotoURLs struct {
 	Thumb   string `json:"thumb"`
 }
 
-// Отдельная структура для пользователя (автора)
+// Отдельная структура для пользователя
 type UnsplashUser struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
@@ -27,15 +27,15 @@ type UnsplashPhotoResponse struct {
 	Height         int    `json:"height"`
 	Likes          int    `json:"likes"`
 
-	URLs UnsplashPhotoURLs `json:"urls"` // <-- Именованная структура
-	User UnsplashUser      `json:"user"` // <-- Именованная структура
+	URLs UnsplashPhotoURLs `json:"urls"`
+	User UnsplashUser      `json:"user"`
 
 	Views     int64     `json:"views,omitempty"`
 	Downloads int64     `json:"downloads,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// UnsplashSearchResponse остается такой же
+// UnsplashSearchResponse для ответа
 type UnsplashSearchResponse struct {
 	Total      int                     `json:"total"`
 	TotalPages int                     `json:"total_pages"`

@@ -7,10 +7,10 @@ import (
 	"log"
 	"time"
 
-	"github.com/GoArmGo/MediaApp/internal/config" // Ваш пакет конфигурации
+	"github.com/GoArmGo/MediaApp/internal/config"
 	"github.com/GoArmGo/MediaApp/internal/messaging/payloads"
 
-	amqp "github.com/rabbitmq/amqp091-go" // Пакет RabbitMQ
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 // Client представляет собой клиент RabbitMQ
@@ -81,8 +81,7 @@ func (c *Client) Close() {
 	}
 }
 
-// PublishPhotoSearchRequest публикует сообщение о поиске фото в очередь RabbitMQ.
-// Этот метод теперь соответствует интерфейсу ports.PhotoSearchPublisher.
+// PublishPhotoSearchRequest публикует сообщение о поиске фото в очередь RabbitMQ
 func (c *Client) PublishPhotoSearchRequest(ctx context.Context, payload payloads.PhotoSearchPayload) error {
 	// Маршалинг структуры payload в JSON
 	body, err := json.Marshal(payload)
@@ -100,7 +99,7 @@ func (c *Client) PublishPhotoSearchRequest(ctx context.Context, payload payloads
 		false,        // mandatory
 		false,        // immediate
 		amqp.Publishing{
-			ContentType: "application/json", // Указываем, что содержимое - JSON
+			ContentType: "application/json",
 			Body:        body,
 		},
 	)
@@ -111,17 +110,17 @@ func (c *Client) PublishPhotoSearchRequest(ctx context.Context, payload payloads
 	return nil
 }
 
-// StartConsumingPhotoSearchRequests начинает потребление сообщений из очереди.
-// Этот метод реализует интерфейс ports.PhotoSearchConsumer.
+// StartConsumingPhotoSearchRequests начинает потребление сообщений из очереди
+// Этот метод реализует интерфейс ports.PhotoSearchConsumer
 func (c *Client) StartConsumingPhotoSearchRequests(ctx context.Context, handler func(context.Context, payloads.PhotoSearchPayload) error) error {
 	msgs, err := c.channel.Consume(
-		c.queue.Name, // queue
-		"",           // consumer
-		false,        // auto-ack (мы будем подтверждать вручную)
-		false,        // exclusive
-		false,        // no-local
-		false,        // no-wait
-		nil,          // args
+		c.queue.Name,
+		"",
+		false,
+		false,
+		false,
+		false,
+		nil,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to register a consumer: %w", err)
@@ -142,9 +141,9 @@ func (c *Client) StartConsumingPhotoSearchRequests(ctx context.Context, handler 
 				var payload payloads.PhotoSearchPayload
 				if err := json.Unmarshal(msg.Body, &payload); err != nil {
 					log.Printf("Error unmarshalling message: %v, body: %s", err, string(msg.Body))
-					// Если демаршалинг не удался, это, вероятно, плохой формат сообщения.
+					// Если демаршалинг не удался
 					// Отклоняем сообщение, но не возвращаем его в очередь (false, false)
-					// чтобы не застрять в бесконечном цикле ошибок.
+					// чтобы не застрять в бесконечном цикле ошибок
 					if err := msg.Nack(false, false); err != nil {
 						log.Printf("Error NACKing message after unmarshal failure: %v", err)
 					}

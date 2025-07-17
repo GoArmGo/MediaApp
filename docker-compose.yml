@@ -46,40 +46,13 @@ services:
       retries: 5
 
   # --- СЕРВИС API-СЕРВЕРА ---
-  mediaapp-server: # <--- ПЕРЕИМЕНОВАНО
+  mediaapp-server:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
       - '${SERVER_PORT}:${SERVER_PORT}'
     environment:
-      # Эти переменные будут переданы в контейнер mediaapp из твоего .env файла
-      # Docker Compose автоматически загружает .env файл в директории docker-compose.yml
-      DATABASE_URL: ${DATABASE_URL}
-      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
-      MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY_ID}
-      MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY}
-      MINIO_USE_SSL: ${MINIO_USE_SSL}
-      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME}
-      MINIO_REGION: ${MINIO_REGION}
-      UNSPLASH_API_KEY: ${UNSPLASH_API_KEY} # ИМЕННО ТАК: берем из .env, имя "API_KEY"
-      RABBITMQ_URL: ${RABBITMQ_URL}
-      RABBITMQ_QUEUE_NAME: ${RABBITMQ_QUEUE_NAME}
-      SERVER_PORT: ${SERVER_PORT} # Передаем порт, который слушает приложение
-    depends_on:
-      - db
-      - minio
-      - rabbitmq
-    restart: on-failure
-    command: ['./mediaapp', '-mode', 'server'] # <--- ЯВНО УКАЗЫВАЕМ РЕЖИМ "server"
-
-  # --- НОВЫЙ СЕРВИС: ВОРКЕР ---
-  mediaapp-worker: # <--- НОВЫЙ СЕРВИС
-    build:
-      context: .
-      dockerfile: Dockerfile
-    environment:
-      # Воркеру также нужны эти переменные для подключения к БД, MinIO, Unsplash и RabbitMQ
       DATABASE_URL: ${DATABASE_URL}
       MINIO_ENDPOINT: ${MINIO_ENDPOINT}
       MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY_ID}
@@ -90,13 +63,38 @@ services:
       UNSPLASH_API_KEY: ${UNSPLASH_API_KEY}
       RABBITMQ_URL: ${RABBITMQ_URL}
       RABBITMQ_QUEUE_NAME: ${RABBITMQ_QUEUE_NAME}
-      # Порт сервера не нужен воркеру
+      SERVER_PORT: ${SERVER_PORT}
+
     depends_on:
       - db
       - minio
       - rabbitmq
     restart: on-failure
-    command: ['./mediaapp', '-mode', 'worker'] # <--- ЯВНО УКАЗЫВАЕМ РЕЖИМ "worker"
+    command: ['./mediaapp', '-mode', 'server']
+
+  # --- НОВЫЙ СЕРВИС: ВОРКЕР ---
+  mediaapp-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY_ID}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_ACCESS_KEY}
+      MINIO_USE_SSL: ${MINIO_USE_SSL}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME}
+      MINIO_REGION: ${MINIO_REGION}
+      UNSPLASH_API_KEY: ${UNSPLASH_API_KEY}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      RABBITMQ_QUEUE_NAME: ${RABBITMQ_QUEUE_NAME}
+
+    depends_on:
+      - db
+      - minio
+      - rabbitmq
+    restart: on-failure
+    command: ['./mediaapp', '-mode', 'worker']
 
 volumes:
   db_data:

@@ -11,48 +11,48 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/GoArmGo/MediaApp/internal/config" // Для получения UnsplashAccessKey
-	"github.com/GoArmGo/MediaApp/internal/domain" // Для маппинга в domain.Photo
+	"github.com/GoArmGo/MediaApp/internal/config"
+	"github.com/GoArmGo/MediaApp/internal/domain"
 
-	"github.com/google/uuid" // Для генерации UUID для domain.Photo
+	"github.com/google/uuid"
 )
 
 const (
 	baseURL = "https://api.unsplash.com" // Базовый URL для Unsplash API
 )
 
-// UnsplashAPIClient представляет клиент для взаимодействия с Unsplash API.
+// UnsplashAPIClient представляет клиент для взаимодействия с Unsplash API
 type UnsplashAPIClient struct {
-	httpClient *http.Client // HTTP-клиент для выполнения запросов
-	accessKey  string       // Ваш Unsplash Access Key
+	httpClient *http.Client
+	accessKey  string
 }
 
-// NewUnsplashAPIClient создает новый экземпляр UnsplashAPIClient.
+// NewUnsplashAPIClient создает новый экземпляр UnsplashAPIClient
 func NewUnsplashAPIClient(cfg *config.Config) *UnsplashAPIClient {
 	return &UnsplashAPIClient{
-		httpClient: &http.Client{Timeout: 10 * time.Second}, // Устанавливаем таймаут для HTTP-запросов
+		httpClient: &http.Client{Timeout: 10 * time.Second},
 		accessKey:  cfg.UnsplashAPIKey,
 	}
 }
 
-// fetchAndMapPhoto выполняет HTTP-запрос к Unsplash и маппит ответ в domain.Photo.
-// Это вспомогательная функция, которая используется всеми методами fetcher'а.
+// fetchAndMapPhoto выполняет HTTP-запрос к Unsplash и маппит ответ в domain.Photo
+// Это вспомогательная функция, которая используется всеми методами fetcher
 func (c *UnsplashAPIClient) fetchAndMapPhoto(endpoint string) (*domain.Photo, error) {
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка создания HTTP-запроса: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Client-ID "+c.accessKey) // Добавляем заголовок авторизации
+	req.Header.Set("Authorization", "Client-ID "+c.accessKey) // заголовок авторизации
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка выполнения HTTP-запроса к Unsplash: %w", err)
 	}
-	defer resp.Body.Close() // Важно закрыть тело ответа
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body) // Прочитаем тело ответа для получения деталей ошибки
+		bodyBytes, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("unsplash API вернул статус %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -66,9 +66,9 @@ func (c *UnsplashAPIClient) fetchAndMapPhoto(endpoint string) (*domain.Photo, er
 	return photo, nil
 }
 
-// mapUnsplashPhotoToDomain преобразует UnsplashPhotoResponse в domain.Photo.
+// mapUnsplashPhotoToDomain преобразует UnsplashPhotoResponse в domain.Photo
 func (c *UnsplashAPIClient) mapUnsplashPhotoToDomain(unsplashPhoto *UnsplashPhotoResponse) *domain.Photo {
-	// Генерируем новый UUID для нашего внутреннего ID, так как это новое фото для нас.
+	// Генерируем новый UUID для нашего внутреннего ID, так как это новое фото
 	newPhotoID := uuid.New()
 
 	// Используем AltDescription, если Description пуст
@@ -78,34 +78,32 @@ func (c *UnsplashAPIClient) mapUnsplashPhotoToDomain(unsplashPhoto *UnsplashPhot
 	}
 
 	return &domain.Photo{
-		ID:         newPhotoID,
-		UnsplashID: unsplashPhoto.ID,
-		// UserID будет установлен PhotoUseCase, или мы можем привязать его к системному пользователю здесь.
-		// Пока оставим nil/empty, usecase будет решать.
-		S3URL:          "",          // S3 URL будет установлен после загрузки в S3, не тут.
+		ID:             newPhotoID,
+		UnsplashID:     unsplashPhoto.ID,
+		S3URL:          "",          // S3 URL будет установлен после загрузки в S3, не тут
 		Title:          description, // В качестве заголовка используем описание или alt_description
 		Description:    description,
 		AuthorName:     unsplashPhoto.User.Name,
 		Width:          unsplashPhoto.Width,
 		Height:         unsplashPhoto.Height,
 		LikesCount:     unsplashPhoto.Likes,
-		OriginalURL:    unsplashPhoto.URLs.Full, // Или Regular, в зависимости от предпочтений качества
+		OriginalURL:    unsplashPhoto.URLs.Full,
 		UploadedAt:     unsplashPhoto.CreatedAt,
 		ViewsCount:     unsplashPhoto.Views,
 		DownloadsCount: unsplashPhoto.Downloads,
-		Tags:           nil, // Теги из Unsplash часто в другом формате, пока игнорируем
+		Tags:           nil,
 	}
 }
 
-// FetchPhotoByIDFromExternal реализует метод PhotoFetcher.
+// FetchPhotoByIDFromExternal реализует метод PhotoFetcher
 func (c *UnsplashAPIClient) FetchPhotoByIDFromExternal(ctx context.Context, id string) (*domain.Photo, error) {
 	endpoint := fmt.Sprintf("%s/photos/%s", baseURL, id)
 	return c.fetchAndMapPhoto(endpoint)
 }
 
-// SearchPhotosFromExternal реализует метод PhotoFetcher.
+// SearchPhotosFromExternal реализует метод PhotoFetcher
 func (c *UnsplashAPIClient) SearchPhotosFromExternal(ctx context.Context, query string, page, perPage int) ([]domain.Photo, error) {
-	// Строим URL для поиска
+
 	params := url.Values{}
 	params.Add("query", query)
 	params.Add("page", strconv.Itoa(page))
@@ -142,9 +140,9 @@ func (c *UnsplashAPIClient) SearchPhotosFromExternal(ctx context.Context, query 
 	return domainPhotos, nil
 }
 
-// ListNewPhotosFromExternal реализует метод PhotoFetcher.
+// ListNewPhotosFromExternal реализует метод PhotoFetcher
 func (c *UnsplashAPIClient) ListNewPhotosFromExternal(ctx context.Context, page, perPage int) ([]domain.Photo, error) {
-	// Строим URL для получения списка фото (например, /photos эндпоинт)
+	// Строим URL для получения списка фото - /photos эндпоинт
 	params := url.Values{}
 	params.Add("page", strconv.Itoa(page))
 	params.Add("per_page", strconv.Itoa(perPage))

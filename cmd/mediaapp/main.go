@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"flag" // <--- НОВЫЙ ИМПОРТ: для работы с флагами командной строки
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -20,16 +20,20 @@ import (
 	"github.com/GoArmGo/MediaApp/internal/config"
 	"github.com/GoArmGo/MediaApp/internal/core/ports"
 	"github.com/GoArmGo/MediaApp/internal/database/postgres"
+	"github.com/GoArmGo/MediaApp/internal/domain"
 	"github.com/GoArmGo/MediaApp/internal/handler"
 	"github.com/GoArmGo/MediaApp/internal/messaging/payloads"
 	"github.com/GoArmGo/MediaApp/internal/rabbitmq"
 	"github.com/GoArmGo/MediaApp/internal/usecase"
+
+	pg "gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
-// Определяем константу для максимального количества одновременных загрузок
+// Константа для максимального количества одновременных загрузок
 const maxConcurrentUploads = 5
 
-// Добавим константу для таймаута обработки запроса
+// Константа для таймаута обработки запроса
 const requestTimeout = 30 * time.Second
 
 func main() {
@@ -38,7 +42,7 @@ func main() {
 	flag.Parse() // Парсим флаги
 
 	// Загрузка переменных окружения из .env файла
-	// Этот блок остается в main, так как переменные нужны обоим режимам.
+	// в main, так как переменные нужны обоим режимам.
 	if _, err := os.Stat(".env"); err == nil {
 		if err := godotenv.Load(); err != nil {
 			log.Printf("WARN: Не удалось загрузить .env файл: %v. Продолжаем, предполагая, что переменные окружения установлены внешне.", err)
@@ -57,8 +61,8 @@ func main() {
 		log.Fatalf("Ошибка загрузки конфигурации: %v", err)
 	}
 
-	// 2. Инициализация подключения к базе данных PostgreSQL
-	// Клиент БД нужен обоим режимам (серверу для GetRecent/GetPhotoDetails, воркеру для сохранения)
+	// 2. Инициализация подключения к бд PostgreSQL
+	// Клиент бд нужен обоим режимам (серверу для GetRecent/GetPhotoDetails, воркеру для сохранения)
 	dbClient, err := postgres.NewClient(cfg)
 	if err != nil {
 		log.Fatalf("Ошибка подключения к базе данных: %v", err)
@@ -73,6 +77,18 @@ func main() {
 		}
 	}()
 
+	gormDB, err := gorm.Open(pg.Open(cfg.DatabaseURL), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("Ошибка подключения к базе данных (GORM): %v", err)
+	}
+	log.Println("Успешное подключение к базе данных (GORM).")
+
+	err = gormDB.AutoMigrate(&domain.Photo{}, &domain.Tag{}, &domain.PhotoTag{}, &domain.User{})
+	if err != nil {
+		log.Fatalf("Ошибка GORM AutoMigrate: %v", err)
+	}
+	log.Println("GORM AutoMigrate успешно выполнен.")
+
 	// 3. Инициализация S3 клиента (MinIO)
 	// Клиент MinIO нужен обоим режимам (серверу для GetOrCreate, воркеру для сохранения)
 	fileStorageClient, err := minio.NewMinioClient(cfg)
@@ -86,24 +102,21 @@ func main() {
 
 	// 5. Инициализация PostgresStorage (реализация PhotoStorage для usecase)
 	// Нужен обоим режимам
-	photoStorageImpl := postgres.NewPostgresStorage(dbClient.DB)
+	photoStorageImpl := postgres.NewPostgresStorage(gormDB)
 
 	// 6. Инициализация Use Case (интерактора)
 	// Нужен обоим режимам
 	photoUseCase := usecase.NewPhotoUseCase(photoStorageImpl, unsplashClient, fileStorageClient)
 
 	// 7. Инициализация RabbitMQ клиента
-	// Клиент RabbitMQ нужен обоим режимам (серверу для публикации, воркеру для потребления)
+	// Клиент RabbitMQ нужен обоим режимам (сервер - producer, воркер - consumer)
 	rbmqClient, err := rabbitmq.NewClient(cfg)
 	if err != nil {
 		log.Fatalf("Ошибка инициализации RabbitMQ клиента: %v", err)
 	}
 	defer rbmqClient.Close()
 
-	// Создаем буферизованный канал, который будет служить семафором.
-	// Емкость канала (maxConcurrentUploads) определяет максимальное
-	// количество горутин, которые могут одновременно выполнять
-	// защищенную операцию.
+	// Создаем буферизованный канал, который будет служить семафором
 	uploadLimiter := make(chan struct{}, maxConcurrentUploads)
 
 	// 8. Запуск приложения в зависимости от выбранного режима
@@ -113,17 +126,17 @@ func main() {
 		runServer(cfg, photoUseCase, rbmqClient, uploadLimiter)
 	case "worker":
 		log.Println("Запуск приложения в режиме воркера.")
-		runWorker(cfg, photoUseCase, rbmqClient) // Передаем все необходимые зависимости
+		runWorker(cfg, photoUseCase, rbmqClient)
 	default:
 		log.Fatalf("Неизвестный режим приложения: %s. Используйте 'server' или 'worker'.", *mode)
 	}
 }
 
-// runServer запускает HTTP-сервер и логику публикации сообщений.
+// runServer запускает HTTP-сервер и логику публикации сообщений
 func runServer(
 	cfg *config.Config,
 	photoUseCase usecase.PhotoUseCase,
-	photoSearchPublisher ports.PhotoSearchPublisher, // rbmqClient будет передан сюда
+	photoSearchPublisher ports.PhotoSearchPublisher,
 	uploadLimiter chan struct{},
 ) {
 	photoHandler := handler.NewPhotoHandler(photoUseCase, photoSearchPublisher, uploadLimiter)
@@ -168,18 +181,16 @@ func runServer(
 	log.Println("Сервер успешно завершил работу.")
 }
 
-// runWorker запускает потребителя RabbitMQ и обрабатывает сообщения.
+// runWorker запускает потребителя RabbitMQ и обрабатывает сообщения
 func runWorker(
 	cfg *config.Config,
 	photoUseCase usecase.PhotoUseCase,
-	photoSearchConsumer ports.PhotoSearchConsumer, // <--- ИЗМЕНЕНО: rbmqClient теперь передан как PhotoSearchConsumer
+	photoSearchConsumer ports.PhotoSearchConsumer,
 ) {
 	log.Println("Воркер запущен. Ожидание сообщений в очереди RabbitMQ...")
 
-	// Создаем контекст для воркера, чтобы можно было его корректно остановить.
-	// Используем context.WithCancel, чтобы можно было отменить его при получении сигнала.
 	workerCtx, cancelWorker := context.WithCancel(context.Background())
-	defer cancelWorker() // Гарантируем отмену контекста при выходе из функции
+	defer cancelWorker()
 
 	// Определяем функцию-обработчик для сообщений RabbitMQ
 	messageHandler := func(ctx context.Context, payload payloads.PhotoSearchPayload) error {
@@ -189,10 +200,10 @@ func runWorker(
 		_, err := photoUseCase.SearchAndSavePhotos(ctx, payload.Query, payload.Page, payload.PerPage)
 		if err != nil {
 			log.Printf("Worker: Ошибка при обработке задачи %v: %v", payload, err)
-			return err // Возвращаем ошибку, чтобы RabbitMQ знал, что нужно Nack
+			return err
 		}
 		log.Printf("Worker: Задача успешно обработана: Поиск '%s', страница %d, на странице %d", payload.Query, payload.Page, payload.PerPage)
-		return nil // Возвращаем nil, чтобы RabbitMQ знал, что нужно Ack
+		return nil
 	}
 
 	// Запускаем потребление сообщений
@@ -205,14 +216,11 @@ func runWorker(
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	<-quit // Блокируем горутину воркера до получения сигнала
+	<-quit
 	log.Println("Worker: Получен сигнал завершения. Завершаем работу воркера...")
 
-	// Отменяем контекст воркера, чтобы остановить потребление сообщений
 	cancelWorker()
 
-	// Даем небольшое время на завершение текущих операций, если это необходимо
-	// (хотя StartConsumingPhotoSearchRequests уже должен обрабатывать контекст)
 	time.Sleep(2 * time.Second) // Небольшая задержка, чтобы логи успели выйти
 	log.Println("Worker: Воркер успешно завершил работу.")
 }
