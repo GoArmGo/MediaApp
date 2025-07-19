@@ -22,28 +22,6 @@ type PhotoFetcher interface {
 	ListNewPhotosFromExternal(ctx context.Context, page, perPage int) ([]domain.Photo, error)
 }
 
-// PhotoStorage определяет интерфейс для взаимодействия с нашим хранилищем фотографий (PostgreSQL + S3)
-// порт для сохранения и получения наших доменных Photo.
-type PhotoStorage interface {
-	// SavePhoto сохраняет фото в нашей базе данных и S3.
-	SavePhoto(ctx context.Context, photo *domain.Photo) error
-
-	// GetPhotoByIDFromDB получает фото из нашей базы данных по нашему внутреннему ID.
-	GetPhotoByIDFromDB(ctx context.Context, id uuid.UUID) (*domain.Photo, error)
-
-	// GetPhotosByUnsplashIDFromDB получает фото из бд по ID от Unsplash
-	GetPhotosByUnsplashIDFromDB(ctx context.Context, unsplashID string) (*domain.Photo, error)
-
-	// SearchPhotosInDB ищет фото в нашей базе данных
-	SearchPhotosInDB(ctx context.Context, query string, page, perPage int) ([]domain.Photo, error)
-
-	// ListAllPhotosInDB получает все фото из нашей базы данных (например, для главной страницы)
-	ListAllPhotosInDB(ctx context.Context, page, perPage int) ([]domain.Photo, error)
-
-	// ListPhotosInDB получает последнее фото из бд
-	ListPhotosInDB(ctx context.Context, page, perPage int) ([]domain.Photo, error)
-}
-
 // FileStorage определяет интерфейс для работы с файловым хранилищем (AWS S3, MinIO)
 // порт для хранения бинарных данных (самих изображений)
 type FileStorage interface {

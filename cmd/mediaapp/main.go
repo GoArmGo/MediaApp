@@ -42,7 +42,7 @@ func main() {
 	flag.Parse() // Парсим флаги
 
 	// Загрузка переменных окружения из .env файла
-	// в main, так как переменные нужны обоим режимам.
+	// в main, так как переменные нужны обоим режимам
 	if _, err := os.Stat(".env"); err == nil {
 		if err := godotenv.Load(); err != nil {
 			log.Printf("WARN: Не удалось загрузить .env файл: %v. Продолжаем, предполагая, что переменные окружения установлены внешне.", err)
@@ -103,10 +103,16 @@ func main() {
 	// 5. Инициализация PostgresStorage (реализация PhotoStorage для usecase)
 	// Нужен обоим режимам
 	photoStorageImpl := postgres.NewPostgresStorage(gormDB)
+	userStorageImpl := postgres.NewGormUserStorage(gormDB)
 
 	// 6. Инициализация Use Case (интерактора)
 	// Нужен обоим режимам
-	photoUseCase := usecase.NewPhotoUseCase(photoStorageImpl, unsplashClient, fileStorageClient)
+	photoUseCase := usecase.NewPhotoUseCase(
+		photoStorageImpl,
+		userStorageImpl,
+		unsplashClient,
+		fileStorageClient,
+	)
 
 	// 7. Инициализация RabbitMQ клиента
 	// Клиент RabbitMQ нужен обоим режимам (сервер - producer, воркер - consumer)
