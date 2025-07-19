@@ -23,4 +23,3 @@ ORM/SQL Builder: GORM (для основной работы с БД), sqlx (дл
 
 Запуск проекта (локально с Docker Compose)
 Для запуска всех компонентов приложения (PostgreSQL, MinIO, RabbitMQ, API-сервер и Воркер) локально используйте Docker Compose.
-
