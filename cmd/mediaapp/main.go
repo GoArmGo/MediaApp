@@ -138,7 +138,7 @@ func main() {
 	}
 }
 
-// runServer запускает HTTP-сервер и логику публикации сообщений
+// runServer запускает HTTP сервер и логику публикации сообщений
 func runServer(
 	cfg *config.Config,
 	photoUseCase usecase.PhotoUseCase,
