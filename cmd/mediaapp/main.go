@@ -20,14 +20,10 @@ import (
 	"github.com/GoArmGo/MediaApp/internal/config"
 	"github.com/GoArmGo/MediaApp/internal/core/ports"
 	"github.com/GoArmGo/MediaApp/internal/database/postgres"
-	"github.com/GoArmGo/MediaApp/internal/domain"
 	"github.com/GoArmGo/MediaApp/internal/handler"
 	"github.com/GoArmGo/MediaApp/internal/messaging/payloads"
 	"github.com/GoArmGo/MediaApp/internal/rabbitmq"
 	"github.com/GoArmGo/MediaApp/internal/usecase"
-
-	pg "gorm.io/driver/postgres"
-	"gorm.io/gorm"
 )
 
 // Константа для максимального количества одновременных загрузок
@@ -77,18 +73,6 @@ func main() {
 		}
 	}()
 
-	gormDB, err := gorm.Open(pg.Open(cfg.DatabaseURL), &gorm.Config{})
-	if err != nil {
-		log.Fatalf("Ошибка подключения к базе данных (GORM): %v", err)
-	}
-	log.Println("Успешное подключение к базе данных (GORM).")
-
-	err = gormDB.AutoMigrate(&domain.Photo{}, &domain.Tag{}, &domain.PhotoTag{}, &domain.User{})
-	if err != nil {
-		log.Fatalf("Ошибка GORM AutoMigrate: %v", err)
-	}
-	log.Println("GORM AutoMigrate успешно выполнен.")
-
 	// 3. Инициализация S3 клиента (MinIO)
 	// Клиент MinIO нужен обоим режимам (серверу для GetOrCreate, воркеру для сохранения)
 	fileStorageClient, err := minio.NewMinioClient(cfg)
@@ -102,8 +86,8 @@ func main() {
 
 	// 5. Инициализация PostgresStorage (реализация PhotoStorage для usecase)
 	// Нужен обоим режимам
-	photoStorageImpl := postgres.NewPostgresStorage(gormDB)
-	userStorageImpl := postgres.NewGormUserStorage(gormDB)
+	photoStorageImpl := postgres.NewPostgresStorage(dbClient.DB)
+	userStorageImpl := postgres.NewUserStorage(dbClient.DB)
 
 	// 6. Инициализация Use Case (интерактора)
 	// Нужен обоим режимам

@@ -2,20 +2,19 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/GoArmGo/MediaApp/internal/config"
 	"github.com/GoArmGo/MediaApp/internal/domain"
-	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
-
-	"gorm.io/gorm"
 )
 
 // Client представляет клиент для взаимодействия с PostgreSQL
@@ -41,33 +40,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 	log.Println("Успешное подключение к базе данных PostgreSQL (для миграций).")
 
-	if err := applyMigrations(cfg.DatabaseURL); err != nil {
-		return nil, fmt.Errorf("ошибка при применении миграций: %w", err)
-	}
-
 	return &Client{DB: db}, nil
-}
-
-// applyMigrations применяет все доступные миграции к бд
-func applyMigrations(databaseURL string) error {
-	m, err := migrate.New(
-		"file://internal/database/postgres/migrations",
-		databaseURL,
-	)
-	if err != nil {
-		return fmt.Errorf("не удалось создать экземпляр мигратора: %w", err)
-	}
-
-	if err = m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("ошибка выполнения миграций: %w", err)
-	}
-
-	if err == migrate.ErrNoChange {
-		log.Println("Миграции не требуются, база данных актуальна.")
-	} else {
-		log.Println("Миграции успешно применены.")
-	}
-	return nil
 }
 
 func (c *Client) Close() error {
@@ -75,10 +48,10 @@ func (c *Client) Close() error {
 }
 
 type PostgresStorage struct {
-	db *gorm.DB
+	db *sqlx.DB
 }
 
-func NewPostgresStorage(db *gorm.DB) *PostgresStorage {
+func NewPostgresStorage(db *sqlx.DB) *PostgresStorage {
 	return &PostgresStorage{db: db}
 }
 
@@ -89,91 +62,110 @@ func (s *PostgresStorage) SavePhoto(ctx context.Context, photo *domain.Photo) er
 		photo.ID = uuid.New()
 	}
 
-	result := s.db.WithContext(ctx).Create(photo)
-	if result.Error != nil {
-		return fmt.Errorf("ошибка при сохранении фото в БД с помощью GORM: %w", result.Error)
+	query := `
+	INSERT INTO photos (id, unsplash_id, title, description, author_name, width, height, url_full, url_thumb, uploaded_at, created_at, updated_at)
+	VALUES (:id, :unsplash_id, :title, :description, :author_name, :width, :height, :url_full, :url_thumb, :uploaded_at, :created_at, :updated_at)
+	ON CONFLICT (unsplash_id) DO NOTHING
+	`
+
+	_, err := s.db.NamedExecContext(ctx, query, photo)
+	if err != nil {
+		return fmt.Errorf("ошибка при сохранении фото: %w", err)
 	}
 
-	log.Printf("Фото %s (Unsplash ID: %s) успешно сохранено в БД (GORM).", photo.ID, photo.UnsplashID)
+	log.Printf("[db] Фото %s (Unsplash ID: %s) сохранено в БД.", photo.ID, photo.UnsplashID)
 	return nil
 }
 
 // GetPhotoByIDFromDB получает детали фото по ID с помощью GORM
 func (s *PostgresStorage) GetPhotoByIDFromDB(ctx context.Context, id uuid.UUID) (*domain.Photo, error) {
+
 	var photo domain.Photo
-	result := s.db.WithContext(ctx).First(&photo, "id = ?", id)
-	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
+	query := `SELECT * FROM photos WHERE id = $1 LIMIT 1`
+
+	err := s.db.GetContext(ctx, &photo, query, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("ошибка при получении фото по ID из БД с помощью GORM: %w", result.Error)
+		return nil, fmt.Errorf("ошибка при получении фото по ID: %w", err)
 	}
+
 	return &photo, nil
 }
 
 // GetPhotosByUnsplashIDFromDB получает фото по Unsplash ID с помощью GORM.
 func (s *PostgresStorage) GetPhotosByUnsplashIDFromDB(ctx context.Context, unsplashID string) (*domain.Photo, error) {
+
 	var photo domain.Photo
-	result := s.db.WithContext(ctx).Where("unsplash_id = ?", unsplashID).First(&photo)
-	if result.Error != nil {
-		if result.Error == gorm.ErrRecordNotFound {
+	query := `SELECT * FROM photos WHERE unsplash_id = $1 LIMIT 1`
+
+	err := s.db.GetContext(ctx, &photo, query, unsplashID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("ошибка при получении фото по Unsplash ID из БД с помощью GORM: %w", result.Error)
+		return nil, fmt.Errorf("ошибка при получении фото по Unsplash ID: %w", err)
 	}
+
 	return &photo, nil
 }
 
 // SearchPhotosInDB ищет фото с помощью GORM.
 func (s *PostgresStorage) SearchPhotosInDB(ctx context.Context, query string, page, perPage int) ([]domain.Photo, error) {
-	var photos []domain.Photo
-	// Офсет и лимит для пагинации
+
 	offset := (page - 1) * perPage
+	q := `
+	SELECT * FROM photos
+	WHERE LOWER(title) LIKE LOWER($1)
+	   OR LOWER(description) LIKE LOWER($1)
+	   OR LOWER(author_name) LIKE LOWER($1)
+	ORDER BY uploaded_at DESC
+	LIMIT $2 OFFSET $3
+	`
 
-	result := s.db.WithContext(ctx).
-		Where("LOWER(title) LIKE LOWER(?) OR LOWER(description) LIKE LOWER(?) OR LOWER(author_name) LIKE LOWER(?)",
-			"%"+query+"%", "%"+query+"%", "%"+query+"%").
-		Order("uploaded_at DESC").
-		Limit(perPage).
-		Offset(offset).
-		Find(&photos)
+	searchTerm := "%" + query + "%"
+	var photos []domain.Photo
 
-	if result.Error != nil {
-		return nil, fmt.Errorf("ошибка при поиске фото в БД с помощью GORM: %w", result.Error)
+	if err := s.db.SelectContext(ctx, &photos, q, searchTerm, perPage, offset); err != nil {
+		return nil, fmt.Errorf("ошибка при поиске фото: %w", err)
 	}
+
 	return photos, nil
 }
 
 // ListAllPhotosInDB получает все фото с помощью GORM
 func (s *PostgresStorage) ListAllPhotosInDB(ctx context.Context, page, perPage int) ([]domain.Photo, error) {
-	var photos []domain.Photo
+
 	offset := (page - 1) * perPage
+	q := `
+	SELECT * FROM photos
+	ORDER BY uploaded_at DESC
+	LIMIT $1 OFFSET $2
+	`
 
-	result := s.db.WithContext(ctx).
-		Order("uploaded_at DESC").
-		Limit(perPage).
-		Offset(offset).
-		Find(&photos)
-
-	if result.Error != nil {
-		return nil, fmt.Errorf("ошибка при получении всех фото из БД с помощью GORM: %w", result.Error)
+	var photos []domain.Photo
+	if err := s.db.SelectContext(ctx, &photos, q, perPage, offset); err != nil {
+		return nil, fmt.Errorf("ошибка при получении всех фото: %w", err)
 	}
+
 	return photos, nil
 }
 
 // ListPhotosInDB получает список фотографий из БД с пагинацией с помощью GORM
 func (s *PostgresStorage) ListPhotosInDB(ctx context.Context, page, perPage int) ([]domain.Photo, error) {
-	var photos []domain.Photo
+
 	offset := (page - 1) * perPage
+	q := `
+	SELECT * FROM photos
+	ORDER BY created_at DESC
+	LIMIT $1 OFFSET $2
+	`
 
-	result := s.db.WithContext(ctx).
-		Order("created_at DESC").
-		Limit(perPage).
-		Offset(offset).
-		Find(&photos)
-
-	if result.Error != nil {
-		return nil, fmt.Errorf("ошибка при получении списка фото из БД с помощью GORM: %w", result.Error)
+	var photos []domain.Photo
+	if err := s.db.SelectContext(ctx, &photos, q, perPage, offset); err != nil {
+		return nil, fmt.Errorf("ошибка при получении списка фото: %w", err)
 	}
+
 	return photos, nil
 }

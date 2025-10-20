@@ -45,6 +45,21 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    image: migrate/migrate
+    command:
+      [
+        '-path',
+        '/migrations',
+        '-database',
+        'postgres://user:pass@db:5432/mediahub?sslmode=disable',
+        'up',
+      ]
+    volumes:
+      - ./internal/database/postgres/migrations:/migrations
+    depends_on:
+      - db
+
   # --- СЕРВИС API-СЕРВЕРА ---
   mediaapp-server:
     build:
