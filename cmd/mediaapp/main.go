@@ -19,7 +19,8 @@ import (
 	"github.com/GoArmGo/MediaApp/internal/adapter/unsplash"
 	"github.com/GoArmGo/MediaApp/internal/config"
 	"github.com/GoArmGo/MediaApp/internal/core/ports"
-	"github.com/GoArmGo/MediaApp/internal/database/postgres"
+	"github.com/GoArmGo/MediaApp/internal/database/client"
+	"github.com/GoArmGo/MediaApp/internal/database/storage"
 	"github.com/GoArmGo/MediaApp/internal/handler"
 	"github.com/GoArmGo/MediaApp/internal/messaging/payloads"
 	"github.com/GoArmGo/MediaApp/internal/rabbitmq"
@@ -59,7 +60,7 @@ func main() {
 
 	// 2. Инициализация подключения к бд PostgreSQL
 	// Клиент бд нужен обоим режимам (серверу для GetRecent/GetPhotoDetails, воркеру для сохранения)
-	dbClient, err := postgres.NewClient(cfg)
+	dbClient, err := client.NewClient(cfg)
 	if err != nil {
 		log.Fatalf("Ошибка подключения к базе данных: %v", err)
 	}
@@ -86,8 +87,8 @@ func main() {
 
 	// 5. Инициализация PostgresStorage (реализация PhotoStorage для usecase)
 	// Нужен обоим режимам
-	photoStorageImpl := postgres.NewPostgresStorage(dbClient.DB)
-	userStorageImpl := postgres.NewUserStorage(dbClient.DB)
+	photoStorageImpl := storage.NewPostgresStorage(dbClient.DB)
+	userStorageImpl := storage.NewUserStorage(dbClient.DB)
 
 	// 6. Инициализация Use Case (интерактора)
 	// Нужен обоим режимам
