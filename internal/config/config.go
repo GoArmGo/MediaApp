@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	// Будет нужен для ручного парсинга bool из строки
 	"github.com/caarlos0/env/v6"
@@ -11,6 +12,9 @@ import (
 
 // Config хранит все конфигурационные параметры приложения
 type Config struct {
+	MaxConcurrentUploads int
+	RequestTimeout       time.Duration
+
 	DatabaseURL    string `env:"DATABASE_URL,required"`
 	ServerPort     string `env:"SERVER_PORT"`
 	UnsplashAPIKey string `env:"UNSPLASH_API_KEY,required"`
@@ -49,6 +53,9 @@ func LoadConfig() (*Config, error) {
 	if cfg.ServerPort == "" {
 		cfg.ServerPort = "8080"
 	}
+
+	cfg.MaxConcurrentUploads = 5
+	cfg.RequestTimeout = 30 * time.Second
 
 	return &cfg, nil
 }
