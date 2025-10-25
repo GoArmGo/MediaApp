@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"os/signal"
 	"syscall"
 
@@ -15,6 +16,7 @@ import (
 
 type App struct {
 	Config               *config.Config
+	Logger               *slog.Logger
 	db                   *sqlx.DB
 	photoUseCase         usecase.PhotoUseCase
 	photoSearchPublisher ports.PhotoSearchPublisher
@@ -23,6 +25,7 @@ type App struct {
 }
 
 func NewApp(cfg *config.Config,
+	Logger *slog.Logger,
 	db *sqlx.DB,
 	photoUseCase usecase.PhotoUseCase,
 	photoSearchPublisher ports.PhotoSearchPublisher,
@@ -30,6 +33,7 @@ func NewApp(cfg *config.Config,
 	uploadLimiter chan struct{}) *App {
 	return &App{
 		db:                   db,
+		Logger:               Logger,
 		photoUseCase:         photoUseCase,
 		photoSearchPublisher: photoSearchPublisher,
 		photoSearchConsumer:  photoSearchConsumer,

@@ -9,6 +9,7 @@ import (
 	"github.com/GoArmGo/MediaApp/internal/config"
 	"github.com/GoArmGo/MediaApp/internal/database/client"
 	"github.com/GoArmGo/MediaApp/internal/database/storage"
+	"github.com/GoArmGo/MediaApp/internal/logger"
 	"github.com/GoArmGo/MediaApp/internal/rabbitmq"
 	"github.com/GoArmGo/MediaApp/internal/usecase"
 )
@@ -20,6 +21,14 @@ func BuildApp() (*app.App, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	slogCfg := logger.SlogConfig{
+		Level:  cfg.LogLevel,
+		Format: cfg.LogFormat,
+	}
+	slogger := logger.NewSlog(slogCfg)
+
+	slogger.Info("logger initialized", "level", cfg.LogLevel, "format", cfg.LogFormat)
 
 	// 2. Инициализация PostgreSQL клиента
 	dbClient, err := client.NewClient(cfg)
@@ -64,6 +73,7 @@ func BuildApp() (*app.App, error) {
 	// 9. Сборка итогового приложения
 	application := app.NewApp(
 		cfg,
+		slogger,
 		dbClient.DB,
 		photoUseCase,
 		photoSearchPublisher,

@@ -28,6 +28,9 @@ type Config struct {
 
 	MinioRegion string `env:"MINIO_REGION,required"`
 
+	LogLevel  string `env:"LOG_LEVEL" envDefault:"info"`
+	LogFormat string `env:"LOG_FORMAT" envDefault:"json"`
+
 	RabbitMQ struct {
 		RabbitMQURL       string `env:"RABBITMQ_URL,required"`
 		RabbitMQQueueName string `env:"RABBITMQ_QUEUE_NAME" envDefault:"photo_search_queue"`
