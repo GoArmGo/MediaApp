@@ -1,214 +1,175 @@
 package handler
 
 import (
-	"database/sql"
 	"encoding/json"
-	"log"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
-	"time"
-
-	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 
 	"github.com/GoArmGo/MediaApp/internal/core/ports"
-	"github.com/GoArmGo/MediaApp/internal/messaging/payloads"
 	"github.com/GoArmGo/MediaApp/internal/usecase"
+	"github.com/google/uuid"
 )
 
-// PhotoHandler будет обрабатывать HTTP-запросы, связанные с фотографиями
+// PhotoHandler — обработчик HTTP-запросов для работы с фотографиями.
 type PhotoHandler struct {
 	photoUseCase         usecase.PhotoUseCase
 	photoSearchPublisher ports.PhotoSearchPublisher
 	uploadLimiter        chan struct{}
+	logger               *slog.Logger
 }
 
-// NewPhotoHandler создает новый экземпляр PhotoHandler
-func NewPhotoHandler(uc usecase.PhotoUseCase, publisher ports.PhotoSearchPublisher, limiter chan struct{}) *PhotoHandler {
+// NewPhotoHandler создаёт новый экземпляр PhotoHandler.
+func NewPhotoHandler(
+	uc usecase.PhotoUseCase,
+	publisher ports.PhotoSearchPublisher,
+	limiter chan struct{},
+	logger *slog.Logger,
+) *PhotoHandler {
 	return &PhotoHandler{
 		photoUseCase:         uc,
 		photoSearchPublisher: publisher,
 		uploadLimiter:        limiter,
+		logger:               logger,
 	}
 }
 
-// respondWithJSON - вспомогательная функция для отправки JSON-ответа
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
+// respondWithJSON — отправляет JSON-ответ клиенту.
+func respondWithJSON(w http.ResponseWriter, code int, payload interface{}, logger *slog.Logger) {
 	response, err := json.Marshal(payload)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("handler: ошибка Marshal JSON: %v", err)
+		logger.Error("failed to marshal JSON response", "error", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_, err = w.Write(response)
-	if err != nil {
-		log.Printf("handler: ошибка записи HTTP-ответа: %v", err)
+	if _, err = w.Write(response); err != nil {
+		logger.Error("failed to write HTTP response", "error", err)
 	}
 }
 
-// respondWithError - вспомогательная функция для отправки JSON-ответа с ошибкой
-func respondWithError(w http.ResponseWriter, code int, message string) {
-	respondWithJSON(w, code, map[string]string{"error": message})
+// respondWithError — отправляет JSON-ответ с ошибкой.
+func respondWithError(w http.ResponseWriter, code int, message string, logger *slog.Logger) {
+	respondWithJSON(w, code, map[string]string{"error": message}, logger)
 }
 
-// --- Методы обработчиков ---
-
-// GetOrCreatePhotoByUnsplashID обрабатывает запрос для получения или создания фото по Unsplash ID
-// GET /photos/{unsplashID}
+// GetOrCreatePhotoByUnsplashID — получает фото по unsplash_id или создаёт новое.
 func (h *PhotoHandler) GetOrCreatePhotoByUnsplashID(w http.ResponseWriter, r *http.Request) {
-
-	select {
-	case h.uploadLimiter <- struct{}{}:
-		defer func() { <-h.uploadLimiter }()
-	case <-r.Context().Done():
-		log.Printf("handler: Запрос на GetOrCreatePhotoByUnsplashID отменен клиентом: %v", r.Context().Err())
-		return
-	}
-
-	unsplashID := chi.URLParam(r, "unsplashID")
+	unsplashID := r.URL.Query().Get("unsplash_id")
 	if unsplashID == "" {
-		respondWithError(w, http.StatusBadRequest, "Unsplash ID не указан")
+		h.logger.Warn("missing required parameter", "param", "unsplash_id")
+		respondWithError(w, http.StatusBadRequest, "Не указан unsplash_id", h.logger)
 		return
 	}
 
-	log.Printf("handler: Запрос на получение/создание фото по Unsplash ID: %s", unsplashID)
+	h.logger.Info("processing request", "endpoint", "GetOrCreatePhotoByUnsplashID", "unsplash_id", unsplashID)
+
 	photo, err := h.photoUseCase.GetOrCreatePhotoByUnsplashID(r.Context(), unsplashID)
 	if err != nil {
-		log.Printf("handler: Ошибка в GetOrCreatePhotoByUnsplashID: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "Ошибка при получении или создании фото")
+		h.logger.Error("failed to get or create photo", "unsplash_id", unsplashID, "error", err)
+		respondWithError(w, http.StatusInternalServerError, "Ошибка при получении или создании фото", h.logger)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, photo)
+	h.logger.Info("photo processed successfully", "unsplash_id", unsplashID)
+	respondWithJSON(w, http.StatusOK, photo, h.logger)
 }
 
-// SearchAndSavePhotos обрабатывает запрос для поиска и сохранения фото
-// GET /photos/search?query={search_query}&page={page}&per_page={per_page}
+// SearchAndSavePhotos — выполняет поиск фото и сохраняет их.
 func (h *PhotoHandler) SearchAndSavePhotos(w http.ResponseWriter, r *http.Request) {
-
-	select {
-	case h.uploadLimiter <- struct{}{}:
-		defer func() { <-h.uploadLimiter }()
-	case <-r.Context().Done():
-		log.Printf("handler: Запрос на SearchAndSavePhotos отменен клиентом: %v", r.Context().Err())
-		return
-	case <-time.After(1 * time.Second): // таймаут на ожидание семафора
-		log.Printf("handler: Превышен таймаут ожидания семафора для SearchAndSavePhotos")
-		respondWithError(w, http.StatusServiceUnavailable, "Сервис временно перегружен, попробуйте позже.")
-		return
-	}
-
 	query := r.URL.Query().Get("query")
 	if query == "" {
-		respondWithError(w, http.StatusBadRequest, "Параметр 'query' не указан")
+		h.logger.Warn("missing required parameter", "param", "query")
+		respondWithError(w, http.StatusBadRequest, "Не указан параметр запроса", h.logger)
 		return
 	}
 
-	// парсинг параметров пагинации
-	pageStr := r.URL.Query().Get("page")
-	page, err := strconv.Atoi(pageStr)
-	if err != nil || page <= 0 {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page <= 0 {
 		page = 1
 	}
-
-	perPageStr := r.URL.Query().Get("per_page")
-	perPage, err := strconv.Atoi(perPageStr)
-	if err != nil || perPage <= 0 || perPage > 100 {
-		perPage = 3
-	}
-
-	log.Printf("handler: Принят асинхронный запрос на поиск фото: '%s', страница %d, на странице %d",
-		query, page, perPage)
-
-	// Создаем полезную нагрузку для сообщения RabbitMQ
-	payload := payloads.PhotoSearchPayload{
-		Query:   query,
-		Page:    page,
-		PerPage: perPage,
-	}
-
-	// Публикуем сообщение в очередь RabbitMQ
-	err = h.photoSearchPublisher.PublishPhotoSearchRequest(r.Context(), payload)
-	if err != nil {
-		log.Printf("handler: Ошибка при публикации сообщения в RabbitMQ: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "Ошибка при постановке задачи в очередь")
-		return
-	}
-
-	// Сразу возвращаем HTTP 202 Accepted, так как задача принята в обработку
-	respondWithJSON(w, http.StatusAccepted, map[string]string{
-		"message":  "Запрос на поиск и сохранение фото принят в обработку. Результаты будут доступны позже.",
-		"query":    query,
-		"page":     strconv.Itoa(page),
-		"per_page": strconv.Itoa(perPage),
-	})
-	// без очереди
-	// photos, err := h.photoUseCase.SearchAndSavePhotos(r.Context(), query, page, perPage)
-	// if err != nil {
-	// 	log.Printf("handler: Ошибка в SearchAndSavePhotos: %v", err)
-	// 	respondWithError(w, http.StatusInternalServerError, "Ошибка при поиске и сохранении фото")
-	// 	return
-	// }
-
-	// respondWithJSON(w, http.StatusOK, photos)
-}
-
-// GetRecentPhotosFromDB обрабатывает запрос для получения последних фото из бд
-// GET /photos/recent?page={page}&per_page={per_page}
-func (h *PhotoHandler) GetRecentPhotosFromDB(w http.ResponseWriter, r *http.Request) {
-
-	pageStr := r.URL.Query().Get("page")
-	page, err := strconv.Atoi(pageStr)
-	if err != nil || page <= 0 {
-		page = 1
-	}
-
-	perPageStr := r.URL.Query().Get("per_page")
-	perPage, err := strconv.Atoi(perPageStr)
-	if err != nil || perPage <= 0 || perPage > 100 {
+	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if perPage <= 0 {
 		perPage = 10
 	}
 
-	log.Printf("handler: Запрос на получение последних фото из БД: страница %d, на странице %d", page, perPage)
-	photos, err := h.photoUseCase.GetRecentPhotosFromDB(r.Context(), page, perPage)
+	h.logger.Info("searching and saving photos",
+		"endpoint", "SearchAndSavePhotos",
+		"query", query,
+		"page", page,
+		"per_page", perPage,
+	)
+
+	_, err := h.photoUseCase.SearchAndSavePhotos(r.Context(), query, page, perPage)
 	if err != nil {
-		log.Printf("handler: Ошибка в GetRecentPhotosFromDB: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "Ошибка при получении последних фото")
+		h.logger.Error("failed to search and save photos", "query", query, "error", err)
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Ошибка поиска фото: %v", err), h.logger)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, photos)
+	h.logger.Info("photos search and save completed", "query", query, "page", page)
+	respondWithJSON(w, http.StatusOK, map[string]string{"message": "Фотографии успешно сохранены"}, h.logger)
 }
 
-// GetPhotoDetailsFromDB обрабатывает запрос для получения деталей фото по нашему внутреннему ID
-// GET /photos/{id}
+// GetRecentPhotosFromDB — получает последние фото из БД.
+func (h *PhotoHandler) GetRecentPhotosFromDB(w http.ResponseWriter, r *http.Request) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+	if perPage <= 0 {
+		perPage = 10
+	}
+
+	h.logger.Info("fetching recent photos",
+		"endpoint", "GetRecentPhotosFromDB",
+		"page", page,
+		"per_page", perPage,
+	)
+
+	photos, err := h.photoUseCase.GetRecentPhotosFromDB(r.Context(), page, perPage)
+	if err != nil {
+		h.logger.Error("failed to fetch recent photos", "error", err)
+		respondWithError(w, http.StatusInternalServerError, "Ошибка получения последних фото", h.logger)
+		return
+	}
+
+	h.logger.Info("recent photos fetched successfully", "count", len(photos))
+	respondWithJSON(w, http.StatusOK, photos, h.logger)
+}
+
+// GetPhotoDetailsFromDB — получает детальную информацию о фото.
 func (h *PhotoHandler) GetPhotoDetailsFromDB(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-	if idStr == "" {
-		respondWithError(w, http.StatusBadRequest, "ID фото не указан")
+	photoIDStr := r.URL.Query().Get("photo_id")
+	if photoIDStr == "" {
+		h.logger.Warn("missing required parameter", "param", "photo_id")
+		respondWithError(w, http.StatusBadRequest, "Не указан photo_id", h.logger)
 		return
 	}
 
-	photoID, err := uuid.Parse(idStr)
+	photoUUID, err := uuid.Parse(photoIDStr)
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Некорректный формат ID фото")
+		h.logger.Error("invalid photo_id parameter", "photo_id", photoIDStr, "error", err)
+		respondWithError(w, http.StatusBadRequest, "Некорректный photo_id", h.logger)
 		return
 	}
 
-	log.Printf("handler: Запрос на получение деталей фото по ID: %s", photoID)
-	photo, err := h.photoUseCase.GetPhotoDetailsFromDB(r.Context(), photoID)
+	h.logger.Info("fetching photo details",
+		"endpoint", "GetPhotoDetailsFromDB",
+		"photo_id", photoUUID,
+	)
+
+	photo, err := h.photoUseCase.GetPhotoDetailsFromDB(r.Context(), photoUUID)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			respondWithError(w, http.StatusNotFound, "Фотография не найдена")
-			return
-		}
-		log.Printf("handler: Ошибка в GetPhotoDetailsFromDB: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "Ошибка при получении деталей фото")
+		h.logger.Error("failed to fetch photo details", "photo_id", photoUUID, "error", err)
+		respondWithError(w, http.StatusInternalServerError, "Ошибка получения информации о фото", h.logger)
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, photo)
+	h.logger.Info("photo details fetched successfully", "photo_id", photoUUID)
+	respondWithJSON(w, http.StatusOK, photo, h.logger)
 }

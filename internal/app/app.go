@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
 	"log/slog"
 	"os/signal"
 	"syscall"
@@ -46,53 +45,72 @@ func (a *App) Run(ctx context.Context, mode *string) error {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Printf("[app] Запуск в режиме: %s", mode)
+	a.Logger.Info("application starting", "mode", *mode)
 
 	var err error
 
 	switch *mode {
 	case "server":
-		err = runServer(ctx, a.Config, a.photoUseCase, a.photoSearchPublisher, a.uploadLimiter)
+		a.Logger.Info("starting server mode")
+		err = runServer(ctx, a.Config, a.photoUseCase, a.photoSearchPublisher, a.uploadLimiter, a.Logger)
 
 	case "worker":
-		err = runWorker(ctx, a.Config, a.photoUseCase, a.photoSearchConsumer)
+		a.Logger.Info("starting worker mode")
+		err = runWorker(ctx, a.Config, a.photoUseCase, a.photoSearchConsumer, a.Logger)
 
 	default:
 		err = fmt.Errorf("неизвестный режим: %s (используйте 'server' или 'worker')", mode)
+		a.Logger.Error("invalid mode", "mode", *mode, "error", err)
 	}
 
 	if err != nil {
+		a.Logger.Error("application run error", "error", err)
 		return err
 	}
 
 	// ожидаем сигнал завершения
 	<-ctx.Done()
-	log.Println("[app] Завершение работы...")
+	a.Logger.Info("shutdown signal received")
 
 	// аккуратно закрываем ресурсы
 	if closeErr := a.Shutdown(); closeErr != nil {
-		log.Printf("[app] ошибка при завершении: %v", closeErr)
+		a.Logger.Error("shutdown error", "error", closeErr)
+	} else {
+		a.Logger.Info("shutdown completed successfully")
 	}
 
-	log.Println("[app] Завершено корректно.")
+	a.Logger.Info("application stopped gracefully")
 	return nil
 }
 
 // Shutdown закрывает все ресурсы приложения
 func (a *App) Shutdown() error {
 	if a.db != nil {
+		a.Logger.Info("closing database connection")
 		if err := a.db.Close(); err != nil {
+			a.Logger.Error("failed to close database", "error", err)
 			return fmt.Errorf("ошибка закрытия БД: %w", err)
 		}
 	}
 
 	// если publisher/consumer имеют методы Close — вызываем их
 	if closer, ok := a.photoSearchPublisher.(interface{ Close() error }); ok {
-		_ = closer.Close()
+		a.Logger.Info("closing photo search publisher")
+		if err := closer.Close(); err != nil {
+			a.Logger.Error("failed to close publisher", "error", err)
+		}
 	}
 	if closer, ok := a.photoSearchConsumer.(interface{ Close() error }); ok {
-		_ = closer.Close()
+		a.Logger.Info("closing photo search consumer")
+		if err := closer.Close(); err != nil {
+			a.Logger.Error("failed to close consumer", "error", err)
+		}
 	}
 
 	return nil
+}
+
+// LoggerIns возвращает основной экземпляр slog.Logger приложения
+func (a *App) LoggerIns() *slog.Logger {
+	return a.Logger
 }

@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,30 +21,45 @@ func runWorker(
 	cfg *config.Config,
 	photoUseCase usecase.PhotoUseCase,
 	photoSearchConsumer ports.PhotoSearchConsumer,
+	logger *slog.Logger, // ← добавили логгер
 ) error {
-	log.Println("Воркер запущен. Ожидание сообщений в очереди RabbitMQ...")
+	logger.Info("worker started", "queue", cfg.RabbitMQ.RabbitMQQueueName)
 
 	workerCtx, cancelWorker := context.WithCancel(ctx)
 	defer cancelWorker()
 
 	// Определяем функцию-обработчик для сообщений RabbitMQ
 	messageHandler := func(ctx context.Context, payload payloads.PhotoSearchPayload) error {
-		log.Printf("Worker: Обработка задачи: Поиск '%s', страница %d, на странице %d", payload.Query, payload.Page, payload.PerPage)
+		logger.Info("processing task",
+			"query", payload.Query,
+			"page", payload.Page,
+			"per_page", payload.PerPage,
+		)
 
 		// Вызываем PhotoUseCase для выполнения реальной работы
 		_, err := photoUseCase.SearchAndSavePhotos(ctx, payload.Query, payload.Page, payload.PerPage)
 		if err != nil {
-			log.Printf("Worker: Ошибка при обработке задачи %v: %v", payload, err)
+			logger.Error("failed to process task",
+				"query", payload.Query,
+				"page", payload.Page,
+				"per_page", payload.PerPage,
+				"error", err,
+			)
 			return err
 		}
-		log.Printf("Worker: Задача успешно обработана: Поиск '%s', страница %d, на странице %d", payload.Query, payload.Page, payload.PerPage)
+
+		logger.Info("task processed successfully",
+			"query", payload.Query,
+			"page", payload.Page,
+			"per_page", payload.PerPage,
+		)
 		return nil
 	}
 
 	// Запускаем потребление сообщений
 	err := photoSearchConsumer.StartConsumingPhotoSearchRequests(workerCtx, messageHandler)
 	if err != nil {
-		//log.Fatalf("Worker: Ошибка при запуске потребителя RabbitMQ: %v", err)
+		logger.Error("failed to start RabbitMQ consumer", "error", err)
 		return fmt.Errorf("ошибка при запуске потребителя RabbitMQ: %w", err)
 	}
 
@@ -53,12 +68,12 @@ func runWorker(
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Worker: Получен сигнал завершения. Завершаем работу воркера...")
+	logger.Warn("shutdown signal received, stopping worker...")
 
 	cancelWorker()
 
-	time.Sleep(2 * time.Second) // Небольшая задержка, чтобы логи успели выйти
-	log.Println("Worker: Воркер успешно завершил работу.")
+	time.Sleep(2 * time.Second) // небольшая задержка для корректного завершения
+	logger.Info("worker stopped gracefully")
 
 	return nil
 }

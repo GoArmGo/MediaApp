@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,11 +26,13 @@ func runServer(
 	photoUseCase usecase.PhotoUseCase,
 	photoSearchPublisher ports.PhotoSearchPublisher,
 	uploadLimiter chan struct{},
+	logger *slog.Logger,
 ) error {
-	photoHandler := handler.NewPhotoHandler(photoUseCase, photoSearchPublisher, uploadLimiter)
+	photoHandler := handler.NewPhotoHandler(photoUseCase, photoSearchPublisher, uploadLimiter, logger)
 
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+
+	r.Use(handler.RequestLogger(logger))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(cfg.RequestTimeout))
 

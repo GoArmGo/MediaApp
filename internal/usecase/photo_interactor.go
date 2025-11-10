@@ -152,7 +152,8 @@ func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, p
 			continue // пропускаем это фото, если нет ошибки "нет строк"
 		}
 		if existingPhoto != nil {
-			log.Printf("usecase: Фото с Unsplash ID %s уже существует в БД (ID: %s), пропускаем сохранение.", photo.UnsplashID, existingPhoto.ID)
+			log.Printf("usecase: Фото с Unsplash ID %s уже существует в БД (ID: %s), пропускаем сохранение.",
+				photo.UnsplashID, existingPhoto.ID)
 			savedPhotos = append(savedPhotos, *existingPhoto) // добавляем существующее фото в список возвращаемых
 			continue
 		}

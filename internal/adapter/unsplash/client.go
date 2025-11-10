@@ -102,7 +102,8 @@ func (c *UnsplashAPIClient) FetchPhotoByIDFromExternal(ctx context.Context, id s
 }
 
 // SearchPhotosFromExternal реализует метод PhotoFetcher
-func (c *UnsplashAPIClient) SearchPhotosFromExternal(ctx context.Context, query string, page, perPage int) ([]domain.Photo, error) {
+func (c *UnsplashAPIClient) SearchPhotosFromExternal(ctx context.Context, query string, page, perPage int) (
+	[]domain.Photo, error) {
 
 	params := url.Values{}
 	params.Add("query", query)
