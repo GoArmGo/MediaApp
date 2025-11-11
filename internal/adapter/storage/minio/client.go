@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -23,10 +23,11 @@ type Client struct {
 	s3Client   *s3.Client
 	uploader   *manager.Uploader
 	bucketName string
+	logger     *slog.Logger
 }
 
 // NewMinioClient создает и инициализирует новый MinIO Client, используя переданную конфигурацию
-func NewMinioClient(cfg *appconfig.Config) (*Client, error) {
+func NewMinioClient(cfg *appconfig.Config, logger *slog.Logger) (*Client, error) {
 	minioAccessKey := cfg.MinioAccessKeyID
 	minioSecretKey := cfg.MinioSecretAccessKey
 	minioBucketName := cfg.MinioBucketName
@@ -56,6 +57,7 @@ func NewMinioClient(cfg *appconfig.Config) (*Client, error) {
 			})),
 	)
 	if err != nil {
+		logger.Error("failed to load AWS config for MinIO", "error", err)
 		return nil, fmt.Errorf("failed to load AWS config for MinIO: %w", err)
 	}
 
@@ -82,7 +84,7 @@ func NewMinioClient(cfg *appconfig.Config) (*Client, error) {
 	})
 
 	if err != nil {
-		log.Printf("Bucket '%s' not found, creating...", minioBucketName)
+		logger.Warn("bucket not found, creating...", "bucket", minioBucketName)
 
 		_, createErr := s3Client.CreateBucket(context.TODO(), &s3.CreateBucketInput{
 			Bucket: aws.String(minioBucketName),
@@ -93,6 +95,7 @@ func NewMinioClient(cfg *appconfig.Config) (*Client, error) {
 		})
 
 		if createErr != nil {
+			logger.Error("failed to create bucket", "bucket", minioBucketName, "error", createErr)
 			return nil, fmt.Errorf("failed to create bucket '%s': %w", minioBucketName, createErr)
 		}
 
@@ -101,23 +104,27 @@ func NewMinioClient(cfg *appconfig.Config) (*Client, error) {
 		if err := waiter.Wait(context.TODO(), &s3.HeadBucketInput{
 			Bucket: aws.String(minioBucketName),
 		}, 30*time.Second); err != nil {
+			logger.Error("failed waiting for bucket to be created", "bucket", minioBucketName, "error", err)
 			return nil, fmt.Errorf("failed waiting for bucket '%s' to be created: %w", minioBucketName, err)
 		}
 
-		log.Printf("Bucket '%s' created successfully", minioBucketName)
+		logger.Info("bucket created successfully", "bucket", minioBucketName)
 	} else {
-		log.Printf("Bucket '%s' already exists", minioBucketName)
+		logger.Info("bucket already exists", "bucket", minioBucketName)
 	}
 
 	return &Client{
 		s3Client:   s3Client,
 		uploader:   uploader,
 		bucketName: minioBucketName,
+		logger:     logger,
 	}, nil
 }
 
 // UploadFile загружает файл в указанный бакет MinIO
 func (c *Client) UploadFile(ctx context.Context, objectKey string, fileContent io.Reader, contentType string) (string, error) {
+	start := time.Now()
+
 	uploadOutput, err := c.uploader.Upload(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucketName),
 		Key:         aws.String(objectKey),
@@ -125,22 +132,42 @@ func (c *Client) UploadFile(ctx context.Context, objectKey string, fileContent i
 		ContentType: aws.String(contentType),
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to upload file %s to bucket %s using multipart upload: %w", objectKey, c.bucketName, err)
+		c.logger.Error("failed to upload file",
+			"bucket", c.bucketName,
+			"object", objectKey,
+			"error", err,
+		)
+		return "", fmt.Errorf("failed to upload file %s to bucket %s using multipart upload: %w", objectKey,
+			c.bucketName, err)
 	}
 
-	log.Printf("MinIO: Файл '%s' успешно загружен. Location: %s", objectKey, uploadOutput.Location)
+	duration := time.Since(start)
+	c.logger.Info("file uploaded successfully",
+		"bucket", c.bucketName,
+		"object", objectKey,
+		"location", uploadOutput.Location,
+		"duration_ms", duration.Milliseconds(),
+	)
+
 	return fmt.Sprintf("%s/%s/%s", "http://localhost:9000", c.bucketName, objectKey), nil
 }
 
 // GetFile получает содержимое файла из MinIO
 func (c *Client) GetFile(ctx context.Context, objectKey string) (io.ReadCloser, error) {
+	start := time.Now()
 	output, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(c.bucketName),
 		Key:    aws.String(objectKey),
 	})
 	if err != nil {
+		c.logger.Error("failed to get file", "bucket", c.bucketName, "object", objectKey, "error", err)
 		return nil, fmt.Errorf("failed to get file %s from bucket %s: %w", objectKey, c.bucketName, err)
 	}
+	c.logger.Info("file fetched successfully",
+		"bucket", c.bucketName,
+		"object", objectKey,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
 	return output.Body, nil
 }
 
@@ -151,7 +178,9 @@ func (c *Client) DeleteFile(ctx context.Context, objectKey string) error {
 		Key:    aws.String(objectKey),
 	})
 	if err != nil {
+		c.logger.Error("failed to delete file", "bucket", c.bucketName, "object", objectKey, "error", err)
 		return fmt.Errorf("failed to delete file %s from bucket %s: %w", objectKey, c.bucketName, err)
 	}
+	c.logger.Info("file deleted successfully", "bucket", c.bucketName, "object", objectKey)
 	return nil
 }

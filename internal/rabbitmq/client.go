@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/GoArmGo/MediaApp/internal/config"
@@ -19,29 +19,37 @@ type Client struct {
 	channel *amqp.Channel
 	queue   amqp.Queue
 	cfg     *config.Config
+	logger  *slog.Logger
 }
 
 // NewClient создает и инициализирует новый клиент RabbitMQ
-func NewClient(cfg *config.Config) (*Client, error) {
+func NewClient(cfg *config.Config, logger *slog.Logger) (*Client, error) {
+	start := time.Now()
 	client := &Client{
-		cfg: cfg,
+		cfg:    cfg,
+		logger: logger,
 	}
 
 	// Подключение к RabbitMQ
 	conn, err := amqp.Dial(cfg.RabbitMQ.RabbitMQURL)
 	if err != nil {
+		logger.Error("failed to connect to RabbitMQ", "error", err)
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %v", err)
 	}
 	client.conn = conn
-	log.Println("Successfully connected to RabbitMQ!")
+	logger.Info("connected to RabbitMQ",
+		"url", cfg.RabbitMQ.RabbitMQURL,
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
 
 	// Открытие канала
 	ch, err := conn.Channel()
 	if err != nil {
+		logger.Error("failed to open RabbitMQ channel", "error", err)
 		return nil, fmt.Errorf("failed to open a channel: %v", err)
 	}
 	client.channel = ch
-	log.Println("Channel opened successfully.")
+	logger.Info("RabbitMQ channel opened successfully")
 
 	// Объявление очереди
 	// Это идемпотентная операция: очередь будет создана, если ее нет,
@@ -55,28 +63,33 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		nil,                            // arguments
 	)
 	if err != nil {
+		logger.Error("failed to declare queue", "queue", cfg.RabbitMQ.RabbitMQQueueName, "error", err)
 		return nil, fmt.Errorf("failed to declare a queue: %v", err)
 	}
 	client.queue = q
-	log.Printf("Queue '%s' declared successfully. Messages in queue: %d", q.Name, q.Messages)
+	logger.Info("queue declared successfully",
+		"queue", q.Name,
+		"messages_in_queue", q.Messages,
+	)
 
 	return client, nil
 }
 
 // Close закрывает соединение и канал RabbitMQ
 func (c *Client) Close() {
+	start := time.Now()
 	if c.channel != nil {
 		if err := c.channel.Close(); err != nil {
-			log.Printf("Error closing RabbitMQ channel: %v", err)
+			c.logger.Error("failed to close RabbitMQ channel", "error", err)
 		} else {
-			log.Println("RabbitMQ channel closed.")
+			c.logger.Info("RabbitMQ channel closed")
 		}
 	}
 	if c.conn != nil {
 		if err := c.conn.Close(); err != nil {
-			log.Printf("Error closing RabbitMQ connection: %v", err)
+			c.logger.Error("failed to close RabbitMQ connection", "error", err)
 		} else {
-			log.Println("RabbitMQ connection closed.")
+			c.logger.Info("RabbitMQ connection closed", "duration_ms", time.Since(start).Milliseconds())
 		}
 	}
 }
@@ -86,12 +99,14 @@ func (c *Client) PublishPhotoSearchRequest(ctx context.Context, payload payloads
 	// Маршалинг структуры payload в JSON
 	body, err := json.Marshal(payload)
 	if err != nil {
+		c.logger.Error("failed to marshal payload", "error", err)
 		return fmt.Errorf("failed to marshal payload to JSON: %w", err)
 	}
 
 	publishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
+	start := time.Now()
 	err = c.channel.PublishWithContext(
 		publishCtx,
 		"",           // exchange
@@ -104,9 +119,14 @@ func (c *Client) PublishPhotoSearchRequest(ctx context.Context, payload payloads
 		},
 	)
 	if err != nil {
+		c.logger.Error("failed to publish message", "queue", c.queue.Name, "error", err)
 		return fmt.Errorf("failed to publish a message: %w", err)
 	}
-	log.Printf("Message published to queue '%s': %s", c.queue.Name, string(body))
+	c.logger.Info("message published successfully",
+		"queue", c.queue.Name,
+		"payload", string(body),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
 	return nil
 }
 
@@ -123,10 +143,11 @@ func (c *Client) StartConsumingPhotoSearchRequests(ctx context.Context, handler 
 		nil,
 	)
 	if err != nil {
+		c.logger.Error("failed to register RabbitMQ consumer", "error", err)
 		return fmt.Errorf("failed to register a consumer: %w", err)
 	}
 
-	log.Printf("Consumer registered for queue '%s'. Waiting for messages...", c.queue.Name)
+	c.logger.Info("consumer registered, waiting for messages", "queue", c.queue.Name)
 
 	// Запускаем горутину для обработки сообщений
 	go func() {
@@ -134,41 +155,42 @@ func (c *Client) StartConsumingPhotoSearchRequests(ctx context.Context, handler 
 			select {
 			case msg, ok := <-msgs:
 				if !ok {
-					log.Println("RabbitMQ channel closed, stopping consumer.")
+					c.logger.Warn("RabbitMQ channel closed, stopping consumer")
 					return // Канал закрыт, выходим из горутины
 				}
 
 				var payload payloads.PhotoSearchPayload
 				if err := json.Unmarshal(msg.Body, &payload); err != nil {
-					log.Printf("Error unmarshalling message: %v, body: %s", err, string(msg.Body))
+					c.logger.Error("failed to unmarshal message", "error", err, "body", string(msg.Body))
 					// Если демаршалинг не удался
 					// Отклоняем сообщение, но не возвращаем его в очередь (false, false)
 					// чтобы не застрять в бесконечном цикле ошибок
 					if err := msg.Nack(false, false); err != nil {
-						log.Printf("Error NACKing message after unmarshal failure: %v", err)
+						c.logger.Error("failed to NACK message after unmarshal failure", "error", err)
 					}
 					continue // Переходим к следующему сообщению
 				}
 
-				log.Printf("Received message from queue: %+v", payload)
+				c.logger.Info("received message from queue", "queue", c.queue.Name, "payload", payload)
 
 				// Вызываем переданную функцию-обработчик
 				if err := handler(ctx, payload); err != nil {
-					log.Printf("Error processing message: %v, payload: %+v", err, payload)
+					c.logger.Error("error processing message", "error", err, "payload", payload)
 					// Если обработка не удалась, возвращаем сообщение в очередь (requeue = true)
 					if err := msg.Nack(false, true); err != nil {
-						log.Printf("Error NACKing message after processing failure: %v", err)
+						c.logger.Error("failed to NACK message after handler failure", "error", err)
 					}
 				} else {
 					// Если обработка успешна, подтверждаем сообщение
 					if err := msg.Ack(false); err != nil {
-						log.Printf("Error ACKing message: %v", err)
+						c.logger.Error("failed to ACK message", "error", err)
+					} else {
+						c.logger.Info("message processed and ACKed", "payload", payload)
 					}
-					log.Printf("Message processed and ACKed: %+v", payload)
 				}
 			case <-ctx.Done():
 				// Контекст отменен, останавливаем потребление
-				log.Println("Context cancelled, stopping RabbitMQ consumer.")
+				c.logger.Warn("context cancelled, stopping RabbitMQ consumer")
 				return
 			}
 		}

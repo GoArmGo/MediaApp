@@ -29,7 +29,7 @@ func BuildApp() (*app.App, error) {
 
 	// 2. Инициализация PostgreSQL клиента
 	slogger.Info("initializing PostgreSQL client", "db-URL", cfg.DatabaseURL)
-	dbClient, err := client.NewClient(cfg)
+	dbClient, err := client.NewClient(cfg, slogger)
 	if err != nil {
 		slogger.Error("failed to initialize PostgreSQL client", "error", err)
 		return nil, err
@@ -38,14 +38,14 @@ func BuildApp() (*app.App, error) {
 
 	// 3. Инициализация хранилищ
 	slogger.Info("initializing storages")
-	photoStorage := storage.NewPostgresStorage(dbClient.DB)
-	userStorage := storage.NewUserStorage(dbClient.DB)
+	photoStorage := storage.NewPostgresStorage(dbClient.DB, slogger)
+	userStorage := storage.NewUserStorage(dbClient.DB, slogger)
 	slogger.Info("storages initialized successfully")
 
 	// 4. Инициализация клиентов внешних сервисов
 	slogger.Info("initializing external clients: Unsplash, MinIO")
-	unsplashClient := unsplash.NewUnsplashAPIClient(cfg)
-	fileStorage, err := minio.NewMinioClient(cfg) // S3 / MinIO адаптер
+	unsplashClient := unsplash.NewUnsplashAPIClient(cfg, slogger)
+	fileStorage, err := minio.NewMinioClient(cfg, slogger)
 	if err != nil {
 		slogger.Error("failed to initialize MinIO client", "error", err)
 		return nil, err
@@ -53,7 +53,7 @@ func BuildApp() (*app.App, error) {
 
 	// 5. Инициализация RabbitMQ клиента
 	slogger.Info("initializing RabbitMQ client", "url", cfg.RabbitMQ.RabbitMQURL)
-	rabbitMQClient, err := rabbitmq.NewClient(cfg)
+	rabbitMQClient, err := rabbitmq.NewClient(cfg, slogger)
 	if err != nil {
 		slogger.Error("failed to initialize RabbitMQ client", "error", err)
 		return nil, err
@@ -68,7 +68,7 @@ func BuildApp() (*app.App, error) {
 
 	// 7. Инициализация бизнес-логики (usecases)
 	slogger.Info("initializing usecases")
-	photoUseCase := usecase.NewPhotoUseCase(photoStorage, userStorage, unsplashClient, fileStorage)
+	photoUseCase := usecase.NewPhotoUseCase(photoStorage, userStorage, unsplashClient, fileStorage, slogger)
 	slogger.Info("usecases initialized successfully")
 
 	// 8. Создание лимитера загрузок (например, ограничиваем 5 параллельных загрузок)

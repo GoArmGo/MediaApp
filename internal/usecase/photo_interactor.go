@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/GoArmGo/MediaApp/internal/core/ports"
@@ -18,6 +18,7 @@ type photoUseCase struct {
 	userStorage  ports.UserStorage
 	photoFetcher PhotoFetcher
 	fileStorage  FileStorage
+	logger       *slog.Logger
 }
 
 // NewPhotoUseCase создает новый экземпляр PhotoUseCase
@@ -27,12 +28,14 @@ func NewPhotoUseCase(
 	userStorage ports.UserStorage,
 	photoFetcher PhotoFetcher,
 	fileStorage FileStorage,
+	logger *slog.Logger,
 ) PhotoUseCase {
 	return &photoUseCase{
 		photoStorage: photoStorage,
 		userStorage:  userStorage,
 		photoFetcher: photoFetcher,
 		fileStorage:  fileStorage,
+		logger:       logger,
 	}
 }
 
@@ -40,38 +43,45 @@ func NewPhotoUseCase(
 // Сначала ищет в локальной бд. Если не найдено, получает из Unsplash API,
 // загружает в S3, сохраняет в бд и возвращает
 func (uc *photoUseCase) GetOrCreatePhotoByUnsplashID(ctx context.Context, unsplashID string) (*domain.Photo, error) {
+
+	uc.logger.Info("поиск фото в локальной БД", slog.String("unsplash_id", unsplashID))
 	// 1. Попытка получить фото из собственной базы данных
 	photo, err := uc.photoStorage.GetPhotosByUnsplashIDFromDB(ctx, unsplashID)
 
 	if err != nil && err != sql.ErrNoRows { // Проверяем на ошибку, кроме "нет строк"
+		uc.logger.Error("ошибка при получении фото из БД", slog.String("unsplash_id", unsplashID), slog.Any("error", err))
 		return nil, fmt.Errorf("usecase: ошибка при получении фото из БД по Unsplash ID: %w", err)
 	}
 	if photo != nil {
 		// Фото найдено в бд, возвращаем его
-		log.Printf("usecase: Фото с Unsplash ID %s найдено в локальной БД (ID: %s).", unsplashID, photo.ID)
+		uc.logger.Debug("фото найдено в локальной БД", slog.String("photo_id", photo.ID.String()))
 		return photo, nil
 	}
 
 	// 2. Если фото не найдено в бд, получаем его из Unsplash API
-	log.Printf("usecase: Фото с Unsplash ID %s не найдено в БД. Получаем из Unsplash API...", unsplashID)
+	uc.logger.Info("фото не найдено в БД, запрашиваем из Unsplash API", slog.String("unsplash_id", unsplashID))
 
 	unsplashPhoto, err := uc.photoFetcher.FetchPhotoByIDFromExternal(ctx, unsplashID)
 	if err != nil {
+		uc.logger.Error("ошибка при запросе в Unsplash API", slog.String("unsplash_id", unsplashID), slog.Any("error", err))
 		return nil, fmt.Errorf("usecase: ошибка при получении фото из Unsplash API по ID %s: %w", unsplashID, err)
 	}
 	if unsplashPhoto == nil {
+		uc.logger.Warn("фото не найдено во внешнем API", slog.String("unsplash_id", unsplashID))
 		return nil, fmt.Errorf("usecase: фото с Unsplash ID %s не найдено во внешнем API", unsplashID)
 	}
 
 	// 3. Скачиваем оригинальное фото и загружаем его в S3
-	log.Printf("usecase: Скачиваем оригинальное фото с Unsplash URL: %s", unsplashPhoto.OriginalURL)
+	uc.logger.Info("скачиваем оригинальное фото", slog.String("url", unsplashPhoto.OriginalURL))
 	resp, err := http.Get(unsplashPhoto.OriginalURL)
 	if err != nil {
+		uc.logger.Error("ошибка при скачивании фото", slog.String("url", unsplashPhoto.OriginalURL), slog.Any("error", err))
 		return nil, fmt.Errorf("usecase: ошибка при скачивании фото с Unsplash URL %s: %w", unsplashPhoto.OriginalURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		uc.logger.Warn("неуспешный статус ответа", slog.Int("status_code", resp.StatusCode))
 		return nil, fmt.Errorf("usecase: неуспешный статус при скачивании фото с Unsplash: %s", resp.Status)
 	}
 
@@ -91,6 +101,7 @@ func (uc *photoUseCase) GetOrCreatePhotoByUnsplashID(ctx context.Context, unspla
 
 	s3URL, err := uc.fileStorage.UploadFile(ctx, s3Key, fileStream, contentType)
 	if err != nil {
+		uc.logger.Error("ошибка загрузки в S3", slog.String("unsplash_id", unsplashPhoto.UnsplashID), slog.Any("error", err))
 		return nil, fmt.Errorf("usecase: ошибка загрузки фото %s в S3: %w", unsplashPhoto.UnsplashID, err)
 	}
 	unsplashPhoto.S3URL = s3URL // Сохраняем полученный S3 URL
@@ -99,6 +110,7 @@ func (uc *photoUseCase) GetOrCreatePhotoByUnsplashID(ctx context.Context, unspla
 	// photo.UserID будет установлен в SavePhoto
 	systemUserID, err := uc.userStorage.GetOrCreateSystemUser(ctx)
 	if err != nil {
+		uc.logger.Error("ошибка получения системного пользователя", slog.Any("error", err))
 		return nil, fmt.Errorf("usecase: ошибка при сохранении фото %s в локальной БД: %w", unsplashPhoto.ID, err)
 	}
 
@@ -106,10 +118,11 @@ func (uc *photoUseCase) GetOrCreatePhotoByUnsplashID(ctx context.Context, unspla
 
 	err = uc.photoStorage.SavePhoto(ctx, unsplashPhoto)
 	if err != nil {
+		uc.logger.Error("ошибка сохранения фото в БД", slog.String("photo_id", unsplashPhoto.ID.String()), slog.Any("error", err))
 		return nil, fmt.Errorf("usecase: ошибка при сохранении фото %s в локальной БД: %w", unsplashPhoto.ID, err)
 	}
 
-	log.Printf("usecase: Фото с Unsplash ID %s успешно получено из API, (потенциально) загружено в S3 и сохранено в БД (ID: %s).", unsplashID, unsplashPhoto.ID)
+	uc.logger.Info("фото успешно сохранено", slog.String("photo_id", unsplashPhoto.ID.String()))
 	return unsplashPhoto, nil
 }
 
@@ -126,14 +139,15 @@ func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, p
 	}
 
 	// 1. Ищем фото во внешнем API (Unsplash)
-	log.Printf("usecase: Поиск фото по запросу '%s' во внешнем API (страница %d, на страницу %d)...", query, page, perPage)
+	uc.logger.Info("поиск фото во внешнем API", slog.String("query", query), slog.Int("page", page), slog.Int("per_page", perPage))
 	externalPhotos, err := uc.photoFetcher.SearchPhotosFromExternal(ctx, query, page, perPage)
 
 	if err != nil {
+		uc.logger.Error("ошибка поиска во внешнем API", slog.Any("error", err))
 		return nil, fmt.Errorf("usecase: ошибка при поиске фото во внешнем API: %w", err)
 	}
 	if len(externalPhotos) == 0 {
-		log.Printf("usecase: Поиск по запросу '%s' не дал результатов во внешнем API.", query)
+		uc.logger.Warn("поиск не дал результатов", slog.String("query", query))
 		return []domain.Photo{}, nil
 	}
 
@@ -141,6 +155,7 @@ func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, p
 	// 2. Сохраняем каждое найденное фото в нашей бд и S3
 	systemUserID, err := uc.userStorage.GetOrCreateSystemUser(ctx)
 	if err != nil {
+		uc.logger.Error("ошибка получения системного пользователя", slog.Any("error", err))
 		return nil, fmt.Errorf("usecase: не удалось получить или создать системного пользователя для пачки фото: %w", err)
 	}
 
@@ -148,27 +163,25 @@ func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, p
 		// Избегаем дублирования: проверяем, существует ли уже фото по UnsplashID
 		existingPhoto, err := uc.photoStorage.GetPhotosByUnsplashIDFromDB(ctx, photo.UnsplashID)
 		if err != nil && err != sql.ErrNoRows {
-			log.Printf("usecase: ошибка при проверке существования фото с Unsplash ID %s в БД: %v", photo.UnsplashID, err)
+			uc.logger.Error("ошибка проверки существующего фото", slog.String("unsplash_id", photo.UnsplashID), slog.Any("error", err))
 			continue // пропускаем это фото, если нет ошибки "нет строк"
 		}
 		if existingPhoto != nil {
-			log.Printf("usecase: Фото с Unsplash ID %s уже существует в БД (ID: %s), пропускаем сохранение.",
-				photo.UnsplashID, existingPhoto.ID)
+			uc.logger.Debug("фото уже существует", slog.String("unsplash_id", photo.UnsplashID))
 			savedPhotos = append(savedPhotos, *existingPhoto) // добавляем существующее фото в список возвращаемых
 			continue
 		}
 
 		// Скачиваем оригинальное фото с Unsplash
-		log.Printf("usecase: Скачиваем оригинальное фото с Unsplash URL: %s", photo.OriginalURL)
 		resp, err := http.Get(photo.OriginalURL)
 		if err != nil {
-			log.Printf("usecase: ошибка при скачивании фото с Unsplash URL %s: %v", photo.OriginalURL, err)
+			uc.logger.Error("ошибка скачивания фото", slog.String("url", photo.OriginalURL), slog.Any("error", err))
 			continue // Пропускаем это фото, если не удалось скачать
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			log.Printf("usecase: неуспешный статус при скачивании фото с Unsplash URL %s: %s", photo.OriginalURL, resp.Status)
+			uc.logger.Warn("неуспешный статус скачивания", slog.String("url", photo.OriginalURL), slog.Int("status_code", resp.StatusCode))
 			continue // Пропускаем, если статус не 200 OK
 		}
 
@@ -185,7 +198,7 @@ func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, p
 
 		s3URL, err := uc.fileStorage.UploadFile(ctx, s3Key, fileStream, contentType)
 		if err != nil {
-			log.Printf("usecase: ошибка загрузки фото %s в S3: %v", photo.UnsplashID, err)
+			uc.logger.Error("ошибка загрузки в S3", slog.String("unsplash_id", photo.UnsplashID), slog.Any("error", err))
 			continue // пропускаем, если не удалось загрузить в S3
 		}
 
@@ -196,13 +209,13 @@ func (uc *photoUseCase) SearchAndSavePhotos(ctx context.Context, query string, p
 		// Сохраняем полученное и обработанное фото в собственной базе данных
 		err = uc.photoStorage.SavePhoto(ctx, &photo)
 		if err != nil {
-			log.Printf("usecase: ошибка сохранения фото %s (Unsplash ID: %s) в БД: %v", photo.ID, photo.UnsplashID, err)
+			uc.logger.Error("ошибка сохранения фото", slog.String("unsplash_id", photo.UnsplashID), slog.Any("error", err))
 			continue // Продолжаем цикл, даже если одно фото не сохранилось
 		}
 		savedPhotos = append(savedPhotos, photo)
 	}
 
-	log.Printf("usecase: Поиск по запросу '%s' завершен. Сохранено %d фото из %d найденных во внешнем API.", query, len(savedPhotos), len(externalPhotos))
+	uc.logger.Info("поиск завершён", slog.String("query", query), slog.Int("saved", len(savedPhotos)), slog.Int("found", len(externalPhotos)))
 	return savedPhotos, nil
 }
 
@@ -211,11 +224,13 @@ func (uc *photoUseCase) GetPhotoDetailsFromDB(ctx context.Context, id uuid.UUID)
 	photo, err := uc.photoStorage.GetPhotoByIDFromDB(ctx, id)
 	if err != nil {
 		if err == sql.ErrNoRows {
+			uc.logger.Warn("фото не найдено", slog.String("photo_id", id.String()))
 			return nil, fmt.Errorf("usecase: фото с ID %s не найдено в БД", id)
 		}
+		uc.logger.Error("ошибка получения фото", slog.String("photo_id", id.String()), slog.Any("error", err))
 		return nil, fmt.Errorf("usecase: ошибка при получении фото из БД по ID %s: %w", id, err)
 	}
-	log.Printf("usecase: Фото с ID %s успешно получено из БД.", id)
+	uc.logger.Debug("фото успешно получено", slog.String("photo_id", id.String()))
 	return photo, nil
 }
 
@@ -223,8 +238,9 @@ func (uc *photoUseCase) GetPhotoDetailsFromDB(ctx context.Context, id uuid.UUID)
 func (uc *photoUseCase) GetRecentPhotosFromDB(ctx context.Context, page, perPage int) ([]domain.Photo, error) {
 	photos, err := uc.photoStorage.ListPhotosInDB(ctx, page, perPage)
 	if err != nil {
+		uc.logger.Error("ошибка получения последних фото", slog.Any("error", err))
 		return nil, fmt.Errorf("usecase: ошибка при получении последних фото из БД: %w", err)
 	}
-	log.Printf("usecase: Получено %d последних фото из БД (страница %d, на страницу %d).", len(photos), page, perPage)
+	uc.logger.Info("получены последние фото", slog.Int("count", len(photos)), slog.Int("page", page), slog.Int("per_page", perPage))
 	return photos, nil
 }
