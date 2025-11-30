@@ -6,4 +6,4 @@
 *.log
 *.exe
 # Go binaries
-mediaapp
+/mediaapp

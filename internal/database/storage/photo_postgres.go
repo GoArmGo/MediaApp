@@ -22,7 +22,7 @@ func NewPostgresStorage(db *sqlx.DB, logger *slog.Logger) *PostgresStorage {
 	return &PostgresStorage{db: db, logger: logger}
 }
 
-// SavePhoto сохраняет метаданные фотографии в базе данных с помощью GORM
+// SavePhoto сохраняет метаданные фотографии в базе данных
 func (s *PostgresStorage) SavePhoto(ctx context.Context, photo *domain.Photo) error {
 	start := time.Now()
 
@@ -50,7 +50,7 @@ func (s *PostgresStorage) SavePhoto(ctx context.Context, photo *domain.Photo) er
 	return nil
 }
 
-// GetPhotoByIDFromDB получает детали фото по ID с помощью GORM
+// GetPhotoByIDFromDB получает детали фото по ID
 func (s *PostgresStorage) GetPhotoByIDFromDB(ctx context.Context, id uuid.UUID) (*domain.Photo, error) {
 	start := time.Now()
 
@@ -74,7 +74,7 @@ func (s *PostgresStorage) GetPhotoByIDFromDB(ctx context.Context, id uuid.UUID) 
 	return &photo, nil
 }
 
-// GetPhotosByUnsplashIDFromDB получает фото по Unsplash ID с помощью GORM.
+// GetPhotosByUnsplashIDFromDB получает фото по Unsplash ID.
 func (s *PostgresStorage) GetPhotosByUnsplashIDFromDB(ctx context.Context, unsplashID string) (*domain.Photo, error) {
 	start := time.Now()
 
@@ -98,7 +98,7 @@ func (s *PostgresStorage) GetPhotosByUnsplashIDFromDB(ctx context.Context, unspl
 	return &photo, nil
 }
 
-// SearchPhotosInDB ищет фото с помощью GORM.
+// SearchPhotosInDB ищет фото.
 func (s *PostgresStorage) SearchPhotosInDB(ctx context.Context, query string, page, perPage int) ([]domain.Photo, error) {
 	start := time.Now()
 
@@ -133,7 +133,7 @@ func (s *PostgresStorage) SearchPhotosInDB(ctx context.Context, query string, pa
 	return photos, nil
 }
 
-// ListAllPhotosInDB получает все фото с помощью GORM
+// ListAllPhotosInDB получает все фото
 func (s *PostgresStorage) ListAllPhotosInDB(ctx context.Context, page, perPage int) ([]domain.Photo, error) {
 	start := time.Now()
 
@@ -159,7 +159,7 @@ func (s *PostgresStorage) ListAllPhotosInDB(ctx context.Context, page, perPage i
 	return photos, nil
 }
 
-// ListPhotosInDB получает список фотографий из БД с пагинацией с помощью GORM
+// ListPhotosInDB получает список фотографий из БД с пагинацией
 func (s *PostgresStorage) ListPhotosInDB(ctx context.Context, page, perPage int) ([]domain.Photo, error) {
 	start := time.Now()
 

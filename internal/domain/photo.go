@@ -9,9 +9,9 @@ import (
 // Photo представляет модель фотографии в системе,
 // соответствует таблице photos в бд
 type Photo struct {
-	ID             uuid.UUID `json:"id" gorm:"type:uuid;primaryKey"`
-	UnsplashID     string    `json:"unsplash_id" gorm:"unique"`
-	UserID         uuid.UUID `json:"user_id" gorm:"type:uuid"`
+	ID             uuid.UUID `json:"id"`
+	UnsplashID     string    `json:"unsplash_id"`
+	UserID         uuid.UUID `json:"user_id"`
 	S3URL          string    `json:"s3_url"`
 	Title          string    `json:"title"`
 	Description    string    `json:"description"`
@@ -25,7 +25,7 @@ type Photo struct {
 	DownloadsCount int64     `json:"downloads_count"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
-	Tags           []Tag     `json:"tags,omitempty" gorm:"-"`
+	Tags           []Tag     `json:"tags,omitempty"`
 }
 
 func (Photo) TableName() string {
@@ -35,8 +35,8 @@ func (Photo) TableName() string {
 // Tag представляет модель тега,
 // соответствует таблице tags в бд
 type Tag struct {
-	ID   uuid.UUID `json:"id" gorm:"type:uuid;primaryKey"`
-	Name string    `json:"name" gorm:"unique"`
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
 }
 
 func (Tag) TableName() string {
@@ -46,8 +46,8 @@ func (Tag) TableName() string {
 // PhotoTag представляет связующую модель для отношения Many-to-Many между Photo и Tag,
 // соответствует таблице photo_tags в бд
 type PhotoTag struct {
-	PhotoID uuid.UUID `json:"photo_id" gorm:"primaryKey"`
-	TagID   uuid.UUID `json:"tag_id" gorm:"primaryKey"`
+	PhotoID uuid.UUID `json:"photo_id"`
+	TagID   uuid.UUID `json:"tag_id"`
 }
 
 func (PhotoTag) TableName() string {
